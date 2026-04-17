@@ -1,0 +1,44 @@
+# Dependencias
+node_modules/
+.pnp
+.pnp.js
+
+# Variables de entorno (contienen secrets)
+.env
+.env.local
+.env.*.local
+server/.env
+frontend/.env
+frontend/.env.local
+
+# Builds de producción
+dist/
+build/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+logs/
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker
+server/db/data/
+
+# ChromaDB local data
+chroma_data/
+
+# Coverage
+coverage/
+.nyc_output/

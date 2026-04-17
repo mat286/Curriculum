@@ -1,0 +1,211 @@
+.navbar-shell {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    z-index: 1000;
+    padding: 10px 12px 0;
+    background: linear-gradient(180deg, rgba(7, 17, 31, 0.18) 0%, rgba(7, 17, 31, 0) 100%);
+}
+
+.navbar {
+    width: min(1240px, 100%);
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 12px 16px;
+    border-radius: 20px;
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    background: rgba(7, 17, 31, 0.8);
+    color: #ffffff;
+    box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
+    backdrop-filter: blur(18px);
+}
+
+.navbar-logo {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    border: none;
+    background: transparent;
+    color: #ffffff;
+    cursor: pointer;
+    text-align: left;
+}
+
+.navbar-logo-mark {
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #3b82f6 0%, #22d3ee 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+
+.navbar-logo strong {
+    display: block;
+    font-size: 1rem;
+}
+
+.navbar-logo small {
+    display: block;
+    color: rgba(226, 232, 240, 0.8);
+    font-size: 0.78rem;
+}
+
+.navbar-panel {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    flex: 1;
+}
+
+.navbar-links {
+    list-style: none;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    padding: 0;
+    margin: 0;
+}
+
+.navbar-links li a {
+    display: inline-flex;
+    padding: 9px 12px;
+    border-radius: 10px;
+    color: rgba(255, 255, 255, 0.9);
+    text-decoration: none;
+    font-weight: 600;
+    transition: background 0.2s ease, color 0.2s ease;
+}
+
+.navbar-links li:hover a,
+.navbar-links li.active a {
+    background: rgba(255, 255, 255, 0.1);
+    color: #ffffff;
+}
+
+.navbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.navbar-user {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 1px;
+}
+
+.navbar-user-label {
+    font-size: 0.72rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: rgba(191, 219, 254, 0.82);
+}
+
+.navbar-username {
+    font-size: 0.9rem;
+}
+
+.nav-cta,
+.navbar-logout {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 10px 14px;
+    border-radius: 12px;
+    text-decoration: none;
+    font-weight: 700;
+}
+
+.nav-cta {
+    background: linear-gradient(135deg, #3b82f6 0%, #22d3ee 100%);
+    color: #04111f;
+    box-shadow: 0 12px 24px rgba(56, 189, 248, 0.2);
+}
+
+.navbar-logout {
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: rgba(255, 255, 255, 0.06);
+    color: #ffffff;
+    cursor: pointer;
+}
+
+.navbar-menu-toggle {
+    display: none;
+    flex-direction: column;
+    justify-content: center;
+    gap: 4px;
+    width: 42px;
+    height: 42px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.06);
+    cursor: pointer;
+}
+
+.navbar-menu-toggle span {
+    display: block;
+    width: 18px;
+    height: 2px;
+    margin: 0 auto;
+    border-radius: 999px;
+    background: #ffffff;
+}
+
+@media (max-width: 960px) {
+    .navbar-menu-toggle {
+        display: flex;
+    }
+
+    .navbar-panel {
+        display: none;
+        width: 100%;
+        flex-direction: column;
+        align-items: stretch;
+        padding-top: 8px;
+        border-top: 1px solid rgba(148, 163, 184, 0.18);
+    }
+
+    .navbar-panel.is-open {
+        display: flex;
+    }
+
+    .navbar-links,
+    .navbar-actions {
+        flex-direction: column;
+        align-items: stretch;
+        width: 100%;
+    }
+
+    .navbar-user {
+        align-items: flex-start;
+        padding: 6px 2px;
+    }
+
+    .nav-cta,
+    .navbar-logout {
+        width: 100%;
+    }
+}
+
+@media (max-width: 640px) {
+    .navbar-shell {
+        padding-left: 8px;
+        padding-right: 8px;
+    }
+
+    .navbar {
+        padding: 10px 12px;
+    }
+
+    .navbar-logo small {
+        display: none;
+    }
+}

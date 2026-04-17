@@ -1,0 +1,98 @@
+import express from 'express';
+import cors from 'cors';
+import dotenv from 'dotenv';
+import logger from './utils/logger.js';
+import { errorHandler } from './middlewares/errorHandler.js';
+import { pool, ensureProfileSchema } from './config/db.js';
+import { validateEnv } from './config/validateEnv.js';
+import authRoutes from './routes/auth.js';
+import userRoutes from './routes/user.js';
+import chatRoutes from './routes/chat.js';
+import candidatesRoutes from './routes/candidates.js';
+import candidateChatRoutes from './routes/candidateChat.js';
+import recruiterRoutes from './routes/recruiter.js';
+import { warmupModel } from './services/ollamaService.js';
+import { OLLAMA_MODEL, OLLAMA_ROUTER_MODEL } from './config/ollama.js';
+
+dotenv.config();
+validateEnv();
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Middlewares globales
+app.use(cors());
+app.use(express.json({ limit: '1mb' }));
+
+// Logging de requests
+if (process.env.NODE_ENV !== 'production') {
+    app.use((req, res, next) => {
+        logger.debug({ method: req.method, path: req.path }, 'Request');
+        next();
+    });
+}
+
+// Rutas
+app.use('/api/user', authRoutes);
+app.use('/api/user', userRoutes);
+app.use('/api/chat', chatRoutes);
+app.use('/api/chat', candidateChatRoutes);
+app.use('/api/candidates', candidatesRoutes);
+app.use('/api/recruiter', recruiterRoutes);
+
+// Health check — verifica MySQL y Ollama
+app.get('/health', async (req, res) => {
+    const checks = { mysql: false, ollama: false, chromadb: false };
+
+    try {
+        await pool.query('SELECT 1');
+        checks.mysql = true;
+    } catch { /* MySQL no disponible */ }
+
+    try {
+        const ollamaUrl = process.env.OLLAMA_URL || 'http://localhost:11434';
+        const resp = await fetch(ollamaUrl, { signal: AbortSignal.timeout(3000) });
+        checks.ollama = resp.ok;
+    } catch { /* Ollama no disponible */ }
+
+    try {
+        const chromaUrl = process.env.CHROMA_URL || 'http://localhost:8000';
+        const resp = await fetch(`${chromaUrl}/api/v2/heartbeat`, { signal: AbortSignal.timeout(3000) });
+        checks.chromadb = resp.ok;
+    } catch { /* ChromaDB no disponible */ }
+
+    const allHealthy = checks.mysql && checks.ollama;
+    res.status(allHealthy ? 200 : 503).json({
+        status: allHealthy ? 'ok' : 'degraded',
+        timestamp: new Date().toISOString(),
+        services: checks,
+    });
+});
+
+// 404
+app.use((req, res) => {
+    res.status(404).json({ error: 'Ruta no encontrada', path: req.path });
+});
+
+// Error handler centralizado
+app.use(errorHandler);
+
+// Iniciar servidor
+async function startServer() {
+    try {
+        await ensureProfileSchema();
+
+        app.listen(PORT, () => {
+            logger.info({ port: PORT, env: process.env.NODE_ENV || 'development' }, 'Servidor iniciado');
+            warmupModel(OLLAMA_MODEL);
+            if (OLLAMA_ROUTER_MODEL !== OLLAMA_MODEL) {
+                warmupModel(OLLAMA_ROUTER_MODEL);
+            }
+        });
+    } catch (error) {
+        logger.error({ err: error }, 'No se pudo iniciar el servidor');
+        process.exit(1);
+    }
+}
+
+startServer();

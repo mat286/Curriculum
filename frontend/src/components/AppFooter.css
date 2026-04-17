@@ -1,0 +1,29 @@
+.app-footer {
+  margin-top: 18px;
+  padding: 0;
+  background: linear-gradient(180deg, rgba(2, 8, 23, 0.96) 0%, rgba(7, 18, 34, 0.98) 100%);
+  border-top: 1px solid rgba(71, 85, 105, 0.28);
+}
+
+.app-footer-inner {
+  width: min(1240px, 100%);
+  margin: 0 auto;
+  padding: 18px 18px;
+  text-align: center;
+}
+
+.app-footer p {
+  margin: 0;
+  color: #93a4ba;
+  font-size: 0.92rem;
+}
+
+.app-footer strong {
+  color: #e6edf7;
+}
+
+@media (max-width: 640px) {
+  .app-footer-inner {
+    text-align: left;
+  }
+}
