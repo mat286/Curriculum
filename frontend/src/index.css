@@ -43,6 +43,11 @@ body.modal-open {
   overflow: hidden;
 }
 
+/* Oculta el footer cuando el chat ocupa toda la pantalla */
+body.chat-page-active footer {
+  display: none;
+}
+
 #root {
   min-height: 100vh;
 }

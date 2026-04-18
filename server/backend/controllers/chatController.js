@@ -1,6 +1,6 @@
 import { classify } from '../services/routerService.js';
 import { getUserData } from '../services/dataService.js';
-import { generateResponse } from '../services/responseService.js';
+import { generateResponse, generateResponseStream } from '../services/responseService.js';
 import { search as semanticSearch } from '../services/embeddingService.js';
 import { ValidationError, NotFoundError } from '../middlewares/errorHandler.js';
 import logger from '../utils/logger.js';
@@ -99,5 +99,105 @@ export async function ask(req, res, next) {
         res.json(payload);
     } catch (error) {
         next(error);
+    }
+}
+
+/**
+ * POST /api/chat/ask/stream
+ * Igual que ask() pero transmite la respuesta token a token via SSE.
+ * El cliente puede mostrar los tokens a medida que llegan, sin esperar el final.
+ *
+ * Formato de eventos:
+ *   data: {"token":"hola"}\n\n
+ *   data: {"token":" mundo"}\n\n
+ *   data: {"done":true,"routed":"with_data"}\n\n
+ */
+export async function askStream(req, res, next) {
+    const { question } = req.body;
+
+    if (!question || typeof question !== 'string' || question.trim().length === 0) {
+        return next(new ValidationError('La pregunta no puede estar vacía'));
+    }
+
+    const trimmedQuestion = question.trim();
+    const userId = req.user.id;
+    const userName = `${req.user.nombre || ''} ${req.user.apellido || ''}`.trim() || 'Candidato';
+
+    // SSE headers
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+
+    // Desactiva el algoritmo de Nagle para que cada res.write() se envíe
+    // inmediatamente sin esperar a que se llene el buffer TCP.
+    res.socket?.setNoDelay(true);
+
+    const send = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+    const finish = (meta = {}) => { send({ done: true, ...meta }); res.end(); };
+
+    // Detectar si el cliente se desconectó
+    let clientGone = false;
+    req.on('close', () => { clientGone = true; });
+
+    try {
+        // Fast path
+        const fastResponse = getFastDirectResponse(trimmedQuestion, userName);
+        if (fastResponse) {
+            send({ token: fastResponse });
+            finish({ routed: 'fast-direct' });
+            return;
+        }
+
+        // Clasificación de intención
+        const decision = await classify(trimmedQuestion, userName);
+        logger.info({ userId, intent: decision.intent, needs_db: decision.needs_db }, 'Stream: decisión del router');
+
+        if (!decision.needs_db && decision.direct_response) {
+            send({ token: decision.direct_response });
+            finish({ routed: 'direct' });
+            return;
+        }
+
+        // Obtener datos
+        const [userDataResult, embeddingResult] = await Promise.allSettled([
+            getUserData(userId, decision.fields_required || []),
+            withTimeout(semanticSearch(trimmedQuestion, userId, 2), 900, []),
+        ]);
+
+        if (userDataResult.status === 'rejected') {
+            send({ error: userDataResult.reason?.message || 'Error al obtener datos del usuario' });
+            res.end();
+            return;
+        }
+
+        const userData = userDataResult.value;
+        if (!userData) {
+            send({ error: 'Usuario no encontrado' });
+            res.end();
+            return;
+        }
+
+        const embeddingResults = embeddingResult.status === 'fulfilled' ? embeddingResult.value : [];
+
+        // Streaming de la respuesta
+        await generateResponseStream(
+            userName,
+            trimmedQuestion,
+            userData,
+            embeddingResults,
+            (token) => { if (!clientGone) send({ token }); },
+        );
+
+        if (!clientGone) finish({ routed: 'with_data' });
+    } catch (error) {
+        if (clientGone) return;
+        if (res.headersSent) {
+            send({ error: error.message || 'Error interno del servidor' });
+            res.end();
+        } else {
+            next(error);
+        }
     }
 }

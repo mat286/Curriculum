@@ -4,6 +4,19 @@ import { LLMError } from '../middlewares/errorHandler.js';
 import logger from '../utils/logger.js';
 import { AIProvider } from './AIProvider.js';
 
+// Duración del cooldown cuando se detecta un error 429 (10 minutos)
+const QUOTA_COOLDOWN_MS = 10 * 60 * 1000;
+
+/**
+ * Extrae el retryDelay sugerido por la API de Gemini desde el mensaje de error.
+ * Devuelve milisegundos.
+ */
+function parseRetryDelay(errorMessage = '') {
+    const match = errorMessage.match(/retry in (\d+)/i);
+    if (match) return parseInt(match[1], 10) * 1000;
+    return 5000; // fallback: 5 segundos
+}
+
 export class GeminiProvider extends AIProvider {
     constructor() {
         super();
@@ -11,11 +24,36 @@ export class GeminiProvider extends AIProvider {
             throw new Error('GEMINI_API_KEY no configurada. Agregala al .env (AI_PROVIDER=gemini requiere esta clave).');
         }
         this._client = new GoogleGenerativeAI(GEMINI_API_KEY);
+        // Timestamp hasta el cual Gemini está en cooldown por 429
+        this._quotaCooldownUntil = 0;
+    }
+
+    /**
+     * Verifica si Gemini está en cooldown por cuota excedida.
+     */
+    isInQuotaCooldown() {
+        return Date.now() < this._quotaCooldownUntil;
+    }
+
+    /**
+     * Activa el cooldown de cuota.
+     */
+    activateQuotaCooldown(durationMs = QUOTA_COOLDOWN_MS) {
+        this._quotaCooldownUntil = Date.now() + durationMs;
+        const minutes = Math.round(durationMs / 60000);
+        logger.warn(`[Gemini] Cuota excedida (429). Cooldown activo por ${minutes} minutos. Usando Ollama como fallback.`);
+    }
+
+    /**
+     * Determina si el error es un 429 / cuota excedida de Gemini.
+     */
+    isQuotaError(error) {
+        const msg = error?.message || '';
+        return msg.includes('429') || msg.includes('Too Many Requests') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('Quota exceeded');
     }
 
     /**
      * Genera texto libre con Gemini.
-     * Las opciones model, numCtx y keepAlive no aplican a Gemini y son ignoradas.
      */
     async generate(prompt, options = {}) {
         if (!prompt || typeof prompt !== 'string') {
@@ -43,14 +81,21 @@ export class GeminiProvider extends AIProvider {
             return result.response.text().trim();
         } catch (error) {
             if (error instanceof LLMError) throw error;
+            if (this.isQuotaError(error)) {
+                const delay = parseRetryDelay(error.message);
+                this.activateQuotaCooldown(Math.max(delay + 5000, QUOTA_COOLDOWN_MS));
+                // Propagar como cuota excedida para que el fallback lo capture
+                const quotaErr = new LLMError(`[Gemini 429] Cuota excedida. ${error.message}`);
+                quotaErr.isQuotaError = true;
+                throw quotaErr;
+            }
             logger.error({ err: error }, 'Error comunicando con Gemini');
             throw new LLMError(`Error al generar respuesta: ${error.message}`);
         }
     }
 
     /**
-     * Genera JSON estructurado con Gemini usando el JSON mode nativo
-     * (responseMimeType: 'application/json'). Más confiable que parsear texto libre.
+     * Genera JSON estructurado con Gemini usando el JSON mode nativo.
      */
     async generateJSON(prompt, fallback = null, options = {}) {
         if (!prompt || typeof prompt !== 'string') {
@@ -79,12 +124,64 @@ export class GeminiProvider extends AIProvider {
             const text = result.response.text().trim();
             return JSON.parse(text);
         } catch (error) {
+            if (error instanceof LLMError && error.isQuotaError) throw error;
+            if (this.isQuotaError(error)) {
+                const delay = parseRetryDelay(error.message);
+                this.activateQuotaCooldown(Math.max(delay + 5000, QUOTA_COOLDOWN_MS));
+                const quotaErr = new LLMError(`[Gemini 429] Cuota excedida. ${error.message}`);
+                quotaErr.isQuotaError = true;
+                throw quotaErr;
+            }
             if (error instanceof LLMError) {
                 logger.warn({ err: error.message }, 'Gemini generateJSON timeout');
             } else {
                 logger.warn({ err: error.message }, 'Error en Gemini generateJSON');
             }
             return fallback;
+        }
+    }
+
+    /**
+     * Igual que generate() pero llama a onChunk(token) por cada fragmento recibido,
+     * permitiendo streaming hacia el cliente via SSE.
+     */
+    async generateStream(prompt, options = {}, onChunk) {
+        if (!prompt || typeof prompt !== 'string') {
+            throw new LLMError('El prompt no puede estar vacío');
+        }
+
+        const model = this._client.getGenerativeModel({
+            model: GEMINI_MODEL,
+            generationConfig: {
+                temperature: options.temperature ?? 0.2,
+                maxOutputTokens: options.numPredict ?? 500,
+            },
+        });
+
+        try {
+            const streamResult = await model.generateContentStream(prompt.trim());
+            let result = '';
+
+            for await (const chunk of streamResult.stream) {
+                const text = chunk.text();
+                if (text) {
+                    result += text;
+                    if (onChunk) onChunk(text);
+                }
+            }
+
+            return result.trim();
+        } catch (error) {
+            if (error instanceof LLMError) throw error;
+            if (this.isQuotaError(error)) {
+                const delay = parseRetryDelay(error.message);
+                this.activateQuotaCooldown(Math.max(delay + 5000, QUOTA_COOLDOWN_MS));
+                const quotaErr = new LLMError(`[Gemini 429] Cuota excedida. ${error.message}`);
+                quotaErr.isQuotaError = true;
+                throw quotaErr;
+            }
+            logger.error({ err: error }, 'Error en streaming con Gemini');
+            throw new LLMError(`Error al generar respuesta streaming: ${error.message}`);
         }
     }
 

@@ -108,6 +108,12 @@ export default function CandidateChatPage() {
     const currentUserId = user?.id || user?.userId || user?.googleId;
     const isOwnChat = String(currentUserId || "") === String(id || "");
 
+    // Bloquea el scroll de la página y oculta el footer mientras el chat está activo
+    useEffect(() => {
+        document.body.classList.add("chat-page-active");
+        return () => document.body.classList.remove("chat-page-active");
+    }, []);
+
     useEffect(() => {
         const saved = localStorage.getItem(storageKey);
         if (saved) {
@@ -179,23 +185,55 @@ export default function CandidateChatPage() {
         const text = input.trim();
         if (!text || loading) return;
 
-        const userMessage = { id: `u-${Date.now()}`, role: "user", content: text };
-        setMessages((current) => [...current, userMessage]);
+        const streamingMsgId = `a-stream-${Date.now()}`;
+
+        setMessages((current) => [
+            ...current,
+            { id: `u-${Date.now()}`, role: "user", content: text },
+            { id: streamingMsgId, role: "assistant", content: "", streaming: true },
+        ]);
         setInput("");
         setLoading(true);
         setError("");
 
-        try {
-            const response = await candidateChatService.ask(id, text);
-            setMessages((current) => [
-                ...current,
-                { id: `a-${Date.now()}`, role: "assistant", content: response.answer || "No pude responder en este momento." },
-            ]);
-        } catch (err) {
-            setError(err.message || "No se pudo enviar el mensaje.");
-        } finally {
+        await candidateChatService.askStream(
+            id,
+            text,
+            // onToken
+            (token) => {
+                setMessages((current) =>
+                    current.map((m) => (m.id === streamingMsgId ? { ...m, content: m.content + token } : m))
+                );
+            },
+            // onError
+            (err) => {
+                setMessages((current) =>
+                    current.map((m) =>
+                        m.id === streamingMsgId
+                            ? { ...m, content: err.message || "No se pudo responder en este momento.", streaming: false }
+                            : m
+                    )
+                );
+                setError(err.message || "No se pudo enviar el mensaje.");
+                setLoading(false);
+            },
+            // onDone
+            () => {
+                setMessages((current) =>
+                    current.map((m) => (m.id === streamingMsgId ? { ...m, streaming: false } : m))
+                );
+                setLoading(false);
+            },
+        ).catch((unexpectedErr) => {
+            setMessages((current) =>
+                current.map((m) =>
+                    m.id === streamingMsgId
+                        ? { ...m, content: unexpectedErr.message || "Error inesperado.", streaming: false }
+                        : m
+                )
+            );
             setLoading(false);
-        }
+        });
     };
 
     const handleKeyDown = (event) => {
@@ -203,6 +241,13 @@ export default function CandidateChatPage() {
             event.preventDefault();
             handleSend();
         }
+    };
+
+    const handleClearHistory = () => {
+        if (messages.length > 1 && !window.confirm("¿Querés borrar el historial de esta conversación?")) return;
+        localStorage.removeItem(storageKey);
+        setMessages([buildInitialMessage(candidate?.nombre, isOwnChat)]);
+        setError("");
     };
 
     if (error && !candidate) {
@@ -264,18 +309,38 @@ export default function CandidateChatPage() {
                             </p>
                         </div>
 
-                        <button type="button" className="candidate-cv-button" onClick={() => setShowCVModal(true)}>
-                            📄 Ver CV
-                        </button>
+                        <div className="candidate-chat-topbar-actions">
+                            <button type="button" className="candidate-cv-button" onClick={() => setShowCVModal(true)}>
+                                📄 Ver CV
+                            </button>
+                            <button type="button" className="candidate-clear-button" onClick={handleClearHistory} title="Limpiar historial">
+                                ↺ Limpiar
+                            </button>
+                        </div>
                     </div>
 
                     <div className="candidate-chat-thread">
                         {messages.map((message) => (
                             <div key={message.id} className={`candidate-bubble ${message.role}`}>
-                                {message.content}
+                                {message.streaming && !message.content ? (
+                                    <span className="candidate-loading-dots">
+                                        <span></span><span></span><span></span>
+                                    </span>
+                                ) : (
+                                    <>
+                                        {message.content}
+                                        {message.streaming && <span className="candidate-stream-cursor" aria-hidden="true" />}
+                                    </>
+                                )}
                             </div>
                         ))}
-                        {loading && <div className="candidate-bubble assistant">Pensando respuesta…</div>}
+                        {loading && messages.every((m) => !m.streaming) && (
+                            <div className="candidate-bubble assistant">
+                                <span className="candidate-loading-dots">
+                                    <span></span><span></span><span></span>
+                                </span>
+                            </div>
+                        )}
                     </div>
 
                     {error && candidate && <div className="candidate-chat-error">{error}</div>}

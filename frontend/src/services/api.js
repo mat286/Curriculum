@@ -1,6 +1,5 @@
 import axios from 'axios';
 import { API_BASE_URL, STORAGE_KEYS, ERROR_MESSAGES } from '../utils/constants';
-
 // Crear instancia de axios con configuración base
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -116,6 +115,86 @@ export const chatService = {
     });
     return response.data;
   },
+
+  /**
+   * Streaming SSE: envía la pregunta y llama a los callbacks conforme
+   * llegan los tokens, sin esperar la respuesta completa.
+   *
+   * Conecta directamente al backend (port 3000) para evitar el buffering
+   * interno del proxy de Vite que impide el streaming en tiempo real.
+   *
+   * @param {string} question
+   * @param {string} userId
+   * @param {(token: string) => void} onToken
+   * @param {(err: Error) => void}   onError
+   * @param {() => void}             onDone
+   */
+  askStream: async (question, userId, onToken, onError, onDone) => {
+    const token = localStorage.getItem(STORAGE_KEYS.TOKEN);
+    // Conecta directamente al backend para evitar buffering del proxy de Vite
+    const streamUrl = import.meta.env.VITE_STREAM_URL || 'http://localhost:3000';
+    let response;
+
+    try {
+      response = await fetch(`${streamUrl}/api/chat/ask/stream`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ question, userData: { userId } }),
+      });
+    } catch (networkErr) {
+      onError?.(new Error('Error de red al conectar con el servidor'));
+      return;
+    }
+
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      onError?.(new Error(errData.message || `Error del servidor (${response.status})`));
+      return;
+    }
+
+    if (!response.body) {
+      onError?.(new Error('El servidor no soporta streaming. Intenta recargar la página.'));
+      return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        // Los eventos SSE están separados por \n\n
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop() ?? '';
+
+        for (const part of parts) {
+          const line = part.trim();
+          if (!line.startsWith('data:')) continue;
+          const raw = line.slice(5).trim();
+          try {
+            const parsed = JSON.parse(raw);
+            if (parsed.error) { onError?.(new Error(parsed.error)); return; }
+            if (parsed.done) { onDone?.(); return; }
+            if (parsed.token != null) onToken?.(parsed.token);
+          } catch { /* ignorar líneas no-JSON */ }
+        }
+      }
+    } catch (readErr) {
+      onError?.(new Error('Se interrumpió la conexión con el servidor'));
+      return;
+    } finally {
+      reader.releaseLock();
+    }
+
+    onDone?.();
+  },
 };
 
 // Servicio de chat con candidato específico (por ID)
@@ -123,6 +202,75 @@ export const candidateChatService = {
   ask: async (candidateId, message) => {
     const response = await api.post(`/api/chat/candidate/${candidateId}`, { message });
     return response.data;
+  },
+
+  /**
+   * Igual que ask() pero con SSE streaming token a token.
+   * Conecta directo al backend (port 3000) para evitar el buffering del proxy de Vite.
+   */
+  askStream: async (candidateId, message, onToken, onError, onDone) => {
+    const token = localStorage.getItem(STORAGE_KEYS.TOKEN);
+    const streamUrl = import.meta.env.VITE_STREAM_URL || 'http://localhost:3000';
+    let response;
+
+    try {
+      response = await fetch(`${streamUrl}/api/chat/candidate/${candidateId}/stream`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ message }),
+      });
+    } catch (networkErr) {
+      onError?.(new Error('Error de red al conectar con el servidor'));
+      return;
+    }
+
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      onError?.(new Error(errData.message || `Error del servidor (${response.status})`));
+      return;
+    }
+
+    if (!response.body) {
+      onError?.(new Error('El servidor no soporta streaming.'));
+      return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop() ?? '';
+
+        for (const part of parts) {
+          const line = part.trim();
+          if (!line.startsWith('data:')) continue;
+          const raw = line.slice(5).trim();
+          try {
+            const parsed = JSON.parse(raw);
+            if (parsed.error) { onError?.(new Error(parsed.error)); return; }
+            if (parsed.done) { onDone?.(); return; }
+            if (parsed.token != null) onToken?.(parsed.token);
+          } catch { /* ignorar líneas no-JSON */ }
+        }
+      }
+    } catch (readErr) {
+      onError?.(new Error('Se interrumpió la conexión con el servidor'));
+      return;
+    } finally {
+      reader.releaseLock();
+    }
+
+    onDone?.();
   },
 };
 

@@ -18,6 +18,7 @@ import { OLLAMA_URL, OLLAMA_TIMEOUT, EMBEDDING_MODEL as DEFAULT_EMBEDDING_MODEL 
 
 export const generate = (prompt, options) => provider.generate(prompt, options);
 export const generateJSON = (prompt, fallback, options) => provider.generateJSON(prompt, fallback, options);
+export const generateStream = (prompt, options, onChunk) => provider.generateStream(prompt, options, onChunk);
 export const warmupModel = (model) => provider.warmupModel(model);
 
 // ── Embeddings: SIEMPRE Ollama (nomic-embed-text) ─────────────────────────────

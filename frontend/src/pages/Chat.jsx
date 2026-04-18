@@ -203,27 +203,59 @@ export default function ChatPage() {
     }
 
     const userMessage = input.trim();
-    const newMessage = { sender: "user", text: userMessage, timestamp: new Date() };
-    setMessages((prev) => [...prev, newMessage]);
+    const streamingMsgId = `bot-${Date.now()}`;
+
+    setMessages((prev) => [
+      ...prev,
+      { sender: "user", text: userMessage, timestamp: new Date() },
+      { id: streamingMsgId, sender: "bot", text: "", streaming: true, timestamp: new Date() },
+    ]);
     setInput("");
     setError(null);
     setLoading(true);
 
-    try {
-      const data = await chatService.askQuestion(userMessage, userId);
-      setMessages((prev) => [
-        ...prev,
-        { sender: "bot", text: data.answer || "No se recibió respuesta.", timestamp: new Date() },
-      ]);
-    } catch (err) {
-      console.error("Error en chat:", err);
-      const message = err.message || ERROR_MESSAGES.UNKNOWN_ERROR;
-      setMessages((prev) => [...prev, { sender: "bot", text: message, timestamp: new Date() }]);
+    await chatService.askStream(
+      userMessage,
+      userId,
+      // onToken: agrega cada fragmento al mensaje en curso
+      (token) => {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === streamingMsgId ? { ...m, text: m.text + token } : m))
+        );
+      },
+      // onError
+      (err) => {
+        const message = err.message || ERROR_MESSAGES.UNKNOWN_ERROR;
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === streamingMsgId
+              ? { ...m, text: message, streaming: false }
+              : m
+          )
+        );
+        setError(message);
+        setLoading(false);
+        inputRef.current?.focus();
+      },
+      // onDone
+      () => {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === streamingMsgId ? { ...m, streaming: false } : m))
+        );
+        setLoading(false);
+        inputRef.current?.focus();
+      },
+    ).catch((unexpectedErr) => {
+      console.error("Error inesperado en streaming:", unexpectedErr);
+      const message = unexpectedErr.message || ERROR_MESSAGES.UNKNOWN_ERROR;
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === streamingMsgId ? { ...m, text: message, streaming: false } : m
+        )
+      );
       setError(message);
-    } finally {
       setLoading(false);
-      inputRef.current?.focus();
-    }
+    });
   };
 
   const handleKeyDown = (e) => {
@@ -358,10 +390,23 @@ export default function ChatPage() {
             ) : (
               <>
                 {messages.map((m, i) => (
-                  <div key={`${m.sender}-${i}`} className={`message ${m.sender}`}>
+                  <div key={m.id || `${m.sender}-${i}`} className={`message ${m.sender}`}>
                     <div className="message-role">{m.sender === "user" ? "Tú" : "Asistente IA"}</div>
-                    <div className="message-content">{m.text}</div>
-                    {m.timestamp && (
+                    <div className="message-content">
+                      {m.streaming && !m.text ? (
+                        <span className="loading-dots">
+                          <span></span>
+                          <span></span>
+                          <span></span>
+                        </span>
+                      ) : (
+                        <>
+                          {m.text}
+                          {m.streaming && <span className="stream-cursor" aria-hidden="true" />}
+                        </>
+                      )}
+                    </div>
+                    {m.timestamp && !m.streaming && (
                       <div className="message-timestamp">
                         {new Date(m.timestamp).toLocaleTimeString([], {
                           hour: "2-digit",
@@ -374,7 +419,7 @@ export default function ChatPage() {
               </>
             )}
 
-            {loading && (
+            {loading && messages.every((m) => !m.streaming) && (
               <div className="message bot">
                 <div className="message-role">Asistente IA</div>
                 <div className="message-content loading-dots">
