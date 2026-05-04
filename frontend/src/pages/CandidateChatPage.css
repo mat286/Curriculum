@@ -17,6 +17,27 @@
     z-index: 10;
 }
 
+/* ── Skeleton loaders ───────────────────────────────────────────── */
+@keyframes skeleton-pulse {
+    0%, 100% { opacity: 0.4; }
+    50%       { opacity: 0.8; }
+}
+
+.skeleton {
+    background: rgba(96, 165, 250, 0.12);
+    border-radius: 8px;
+    animation: skeleton-pulse 1.4s ease-in-out infinite;
+}
+
+.skeleton-pill  { height: 28px; width: 110px; border-radius: 999px; }
+.skeleton-title { height: 26px; width: 80%; margin-top: 4px; }
+.skeleton-line  { height: 14px; width: 100%; margin-top: 2px; }
+.skeleton-line--short { width: 60%; }
+
+.skeleton-tags  { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.skeleton-tag   { height: 26px; width: 70px; border-radius: 999px; }
+/* ─────────────────────────────────────────────────────────────── */
+
 .candidate-chat-page.candidate-mode {
     --candidate-accent: #a78bfa;
     --candidate-accent-strong: #f472b6;

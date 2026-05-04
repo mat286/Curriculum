@@ -31,6 +31,9 @@ CREATE TABLE IF NOT EXISTS usuarios (
     github_url VARCHAR(500) DEFAULT NULL,
     portfolio_url VARCHAR(500) DEFAULT NULL,
     is_public TINYINT(1) NOT NULL DEFAULT 0,
+    profile_photo_url VARCHAR(500) DEFAULT NULL,
+    onboarding_step TINYINT UNSIGNED NOT NULL DEFAULT 1,
+    onboarding_completed TINYINT(1) NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_email (email)
@@ -169,4 +172,57 @@ CREATE TABLE IF NOT EXISTS respuestas_entrevista (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES usuarios(id) ON DELETE CASCADE,
     INDEX idx_user_id (user_id)
+) ENGINE=InnoDB;
+
+-- ============================================
+-- Tabla: candidate_context_snapshot
+-- Snapshot compilado del perfil para chat/RAG
+-- ============================================
+CREATE TABLE IF NOT EXISTS candidate_context_snapshot (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    snapshot_json JSON NOT NULL,
+    compiled_context MEDIUMTEXT DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_candidate_snapshot_user_id (user_id),
+    FOREIGN KEY (user_id) REFERENCES usuarios(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- ============================================
+-- Tabla: candidate_conversation_memory
+-- Memoria corta por sesión/candidato
+-- ============================================
+CREATE TABLE IF NOT EXISTS candidate_conversation_memory (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    session_key VARCHAR(191) NOT NULL,
+    candidate_id INT NOT NULL,
+    requester_id INT DEFAULT NULL,
+    summary TEXT DEFAULT NULL,
+    last_messages JSON NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_candidate_memory_session (session_key),
+    INDEX idx_candidate_memory_candidate (candidate_id),
+    FOREIGN KEY (candidate_id) REFERENCES usuarios(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- ============================================
+-- Tabla: candidate_faqs
+-- FAQs personalizadas del candidato con embeddings
+-- ============================================
+CREATE TABLE IF NOT EXISTS candidate_faqs (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    candidate_id INT NOT NULL,
+    question TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    embedding JSON DEFAULT NULL,
+    embedding_model VARCHAR(120) DEFAULT NULL,
+    is_active TINYINT(1) NOT NULL DEFAULT 1,
+    priority INT NOT NULL DEFAULT 50,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_candidate_faq_candidate_active (candidate_id, is_active),
+    INDEX idx_candidate_faq_candidate_priority (candidate_id, priority),
+    FOREIGN KEY (candidate_id) REFERENCES usuarios(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;

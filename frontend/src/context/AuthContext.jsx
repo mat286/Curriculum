@@ -4,6 +4,13 @@ import { STORAGE_KEYS } from '../utils/constants';
 
 const AuthContext = createContext(null);
 
+const parseBoolean = (value) => {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value === 1;
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'si' || normalized === 'yes';
+};
+
 // eslint-disable-next-line react-refresh/only-export-components
 export const useAuth = () => {
   const context = useContext(AuthContext);
@@ -17,6 +24,7 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [token, setToken] = useState(null);
+  const [onboardingCompleted, setOnboardingCompleted] = useState(false);
 
   // Cargar datos del usuario desde localStorage al iniciar
   useEffect(() => {
@@ -25,11 +33,14 @@ export const AuthProvider = ({ children }) => {
 
     if (storedToken && storedUser) {
       try {
+        const parsedUser = JSON.parse(storedUser);
         setToken(storedToken);
-        setUser(JSON.parse(storedUser));
+        setUser(parsedUser);
+        setOnboardingCompleted(parseBoolean(parsedUser?.onboarding_completed ?? parsedUser?.onboardingCompleted));
       } catch (error) {
         localStorage.removeItem(STORAGE_KEYS.TOKEN);
         localStorage.removeItem(STORAGE_KEYS.USER);
+        setOnboardingCompleted(false);
       }
     }
     setLoading(false);
@@ -48,6 +59,7 @@ export const AuthProvider = ({ children }) => {
         localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(response.user));
         setToken(response.token);
         setUser(response.user);
+        setOnboardingCompleted(parseBoolean(response.user?.onboarding_completed ?? response.user?.onboardingCompleted));
         return { success: true, user: response.user };
       } else {
         const errorMessage = response.message || 
@@ -70,21 +82,42 @@ export const AuthProvider = ({ children }) => {
     localStorage.removeItem(STORAGE_KEYS.USER);
     setToken(null);
     setUser(null);
+    setOnboardingCompleted(false);
   };
 
   const updateUser = (userData) => {
     setUser(userData);
     localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(userData));
+    setOnboardingCompleted(parseBoolean(userData?.onboarding_completed ?? userData?.onboardingCompleted));
+  };
+
+  const markOnboardingCompleted = (value = true, userData) => {
+    const normalizedValue = !!value;
+    setOnboardingCompleted(normalizedValue);
+
+    const nextUser = userData || user;
+    if (!nextUser) return;
+
+    const updatedUser = {
+      ...nextUser,
+      onboarding_completed: normalizedValue ? 1 : 0,
+      onboardingCompleted: normalizedValue,
+    };
+
+    setUser(updatedUser);
+    localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(updatedUser));
   };
 
   const value = {
     user,
     token,
     loading,
+    onboardingCompleted,
     isAuthenticated: !!user && !!token,
     login,
     logout,
     updateUser,
+    markOnboardingCompleted,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

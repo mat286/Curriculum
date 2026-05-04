@@ -14,7 +14,7 @@ function profileToDocuments(profile) {
         docs.push({
             id: 'sobre_mi',
             text: `Sobre mí: ${profile.sobre_mi[0].descripcion}`,
-            metadata: { type: 'sobre_mi' },
+            metadata: { type: 'sobre_mi', embedding_domain: 'candidate_summary_embedding' },
         });
     }
 
@@ -24,7 +24,7 @@ function profileToDocuments(profile) {
             docs.push({
                 id: `exp_${i}`,
                 text: `Experiencia laboral: ${exp.puesto} en ${exp.empresa}${actual}. ${exp.descripcion || ''}. Período: ${exp.fecha_inicio || '?'} - ${exp.fecha_fin || 'presente'}`,
-                metadata: { type: 'experiencia_laboral' },
+                metadata: { type: 'experiencia_laboral', embedding_domain: 'candidate_experience_embedding' },
             });
         });
     }
@@ -34,7 +34,7 @@ function profileToDocuments(profile) {
             docs.push({
                 id: `edu_${i}`,
                 text: `Educación: ${edu.titulo} en ${edu.institucion}. Nivel: ${edu.nivel || 'N/A'}. Período: ${edu.fecha_inicio || '?'} - ${edu.fecha_fin || 'presente'}`,
-                metadata: { type: 'educacion' },
+                metadata: { type: 'educacion', embedding_domain: 'candidate_education_embedding' },
             });
         });
     }
@@ -44,7 +44,7 @@ function profileToDocuments(profile) {
             docs.push({
                 id: `curso_${i}`,
                 text: `Curso: ${c.nombre} en ${c.institucion}. ${c.descripcion || ''}`,
-                metadata: { type: 'cursos' },
+                metadata: { type: 'cursos', embedding_domain: 'candidate_education_embedding' },
             });
         });
     }
@@ -54,7 +54,7 @@ function profileToDocuments(profile) {
             docs.push({
                 id: `proy_${i}`,
                 text: `Proyecto: ${p.nombre}. ${p.descripcion || ''}. Tecnologías: ${p.tecnologias || 'N/A'}`,
-                metadata: { type: 'proyectos' },
+                metadata: { type: 'proyectos', embedding_domain: 'candidate_projects_embedding' },
             });
         });
     }
@@ -64,7 +64,7 @@ function profileToDocuments(profile) {
         docs.push({
             id: 'habilidades',
             text: `Habilidades y tecnologías: ${skills}`,
-            metadata: { type: 'habilidades' },
+            metadata: { type: 'habilidades', embedding_domain: 'candidate_skills_embedding' },
         });
     }
 
@@ -73,7 +73,7 @@ function profileToDocuments(profile) {
         docs.push({
             id: 'idiomas',
             text: `Idiomas: ${langs}`,
-            metadata: { type: 'idiomas' },
+            metadata: { type: 'idiomas', embedding_domain: 'candidate_languages_embedding' },
         });
     }
 
@@ -82,7 +82,7 @@ function profileToDocuments(profile) {
             docs.push({
                 id: `resp_${i}`,
                 text: `Pregunta frecuente: "${r.pregunta}" - Respuesta: "${r.respuesta}"`,
-                metadata: { type: 'respuestas_entrevista' },
+                metadata: { type: 'respuestas_entrevista', embedding_domain: 'candidate_faq_embedding' },
             });
         });
     }
@@ -99,7 +99,7 @@ function profileToDocuments(profile) {
             docs.push({
                 id: 'datos_personales',
                 text: `Datos personales: ${parts.join('. ')}`,
-                metadata: { type: 'datos_personales' },
+                metadata: { type: 'datos_personales', embedding_domain: 'candidate_summary_embedding' },
             });
         }
     }
@@ -129,11 +129,13 @@ export async function indexUserData(userId) {
         await deleteUserIndex(userId);
         const collection = await getOrCreateCollection(userId);
 
-        // Generar embeddings para cada documento
+        // Generar embeddings en paralelo con concurrencia limitada (lotes de 3)
+        const BATCH = 3;
         const embeddings = [];
-        for (const doc of docs) {
-            const embedding = await getEmbedding(doc.text);
-            embeddings.push(embedding);
+        for (let i = 0; i < docs.length; i += BATCH) {
+            const batch = docs.slice(i, i + BATCH);
+            const batchEmbeddings = await Promise.all(batch.map(doc => getEmbedding(doc.text)));
+            embeddings.push(...batchEmbeddings);
         }
 
         await collection.add({

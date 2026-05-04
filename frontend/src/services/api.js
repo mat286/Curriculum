@@ -39,7 +39,8 @@ api.interceptors.response.use(
           return Promise.reject(new Error(errorMessage));
         }
         case 401:
-          // No autorizado - limpiar token y datos del usuario
+        case 403:
+          // No autorizado o token inválido/expirado - limpiar sesión
           localStorage.removeItem(STORAGE_KEYS.TOKEN);
           localStorage.removeItem(STORAGE_KEYS.USER);
           // El componente ProtectedRoute manejará la redirección
@@ -102,6 +103,35 @@ export const userService = {
       ...profileData,
       userId,
     });
+    return response.data;
+  },
+};
+
+// Servicio de onboarding
+export const onboarding = {
+  uploadPhoto: async (userId, file) => {
+    const formData = new FormData();
+    formData.append('photo', file);
+
+    const response = await api.post(`/api/user/${userId}/photo`, formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+
+    return response.data;
+  },
+
+  saveStep: async (userId, step, data = {}) => {
+    const response = await api.put(`/api/user/${userId}/onboarding`, data, {
+      params: { step },
+    });
+
+    return response.data;
+  },
+
+  complete: async (userId) => {
+    const response = await api.put(`/api/user/${userId}/onboarding/complete`);
     return response.data;
   },
 };
@@ -278,6 +308,40 @@ export const candidateChatService = {
 export const candidatesService = {
   getAll: async () => {
     const response = await api.get('/api/candidates');
+    return response.data;
+  },
+};
+
+// Servicio de FAQs por candidato
+export const faqService = {
+  list: async (candidateId, includeInactive = false) => {
+    const response = await api.get(`/api/candidates/${candidateId}/faqs`, {
+      params: { includeInactive },
+    });
+    return response.data;
+  },
+
+  create: async (candidateId, { question, answer, priority = 50 }) => {
+    const response = await api.post(`/api/candidates/${candidateId}/faqs`, {
+      question,
+      answer,
+      priority,
+    });
+    return response.data;
+  },
+
+  update: async (candidateId, faqId, { question, answer, priority, isActive }) => {
+    const response = await api.put(`/api/candidates/${candidateId}/faqs/${faqId}`, {
+      question,
+      answer,
+      priority,
+      isActive,
+    });
+    return response.data;
+  },
+
+  remove: async (candidateId, faqId) => {
+    const response = await api.delete(`/api/candidates/${candidateId}/faqs/${faqId}`);
     return response.data;
   },
 };

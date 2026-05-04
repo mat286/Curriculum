@@ -17,10 +17,34 @@ function compactData(value) {
 }
 
 /**
- * Prompt para generar la respuesta final como la persona del CV.
+ * Recorta arrays para evitar que el prompt crezca innecesariamente.
+ * Mantiene los N elementos más recientes (los arrays suelen estar ordenados por fecha).
  */
+function trimArray(arr, max) {
+    if (!Array.isArray(arr) || arr.length <= max) return arr;
+    return arr.slice(-max); // últimos N (más recientes)
+}
+
+/**
+ * Reduce el perfil completo a un subconjunto razonable para el prompt.
+ * Evita mandar 10 trabajos o 20 habilidades cuando con 4-5 alcanza.
+ */
+function trimProfile(data) {
+    if (!data) return data;
+    return {
+        ...data,
+        experiencia_laboral: trimArray(data.experiencia_laboral, 4),
+        educacion: trimArray(data.educacion, 3),
+        cursos: trimArray(data.cursos, 4),
+        proyectos: trimArray(data.proyectos, 4),
+        habilidades: trimArray(data.habilidades, 15),
+        respuestas_entrevista: trimArray(data.respuestas_entrevista, 4),
+    };
+}
+
+
 export function buildResponsePrompt(userName, question, data, embeddingResults) {
-    const compactProfile = compactData(data);
+    const compactProfile = compactData(trimProfile(data));
     let contextBlock = '';
 
     if (compactProfile) {

@@ -1,0 +1,82 @@
+.telemetry-chart {
+  background: var(--surface);
+  border-radius: 8px;
+  padding: 20px;
+  border-left: 4px solid var(--primary);
+  transition: all 0.3s ease;
+  animation: fadeIn 0.6s ease-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.telemetry-chart--primary {
+  border-left-color: var(--primary);
+}
+
+.telemetry-chart--success {
+  border-left-color: var(--success);
+}
+
+.telemetry-chart--warning {
+  border-left-color: #f59e0b;
+}
+
+.telemetry-chart--danger {
+  border-left-color: var(--danger);
+}
+
+.telemetry-chart-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.telemetry-chart-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.telemetry-chart-trend {
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+}
+
+.telemetry-chart-value {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 36px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.2;
+}
+
+.telemetry-chart-unit {
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+/* Hover effects */
+.telemetry-chart:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}

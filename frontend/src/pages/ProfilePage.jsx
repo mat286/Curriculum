@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import ProfileListSection from "../components/profile/ProfileListSection";
 import ProfileSection from "../components/profile/ProfileSection";
 import ProfileSidebar from "../components/profile/ProfileSidebar";
+import ProfileFaqSection from "../components/profile/ProfileFaqSection";
 import { useAuth } from "../context/AuthContext";
 import { userService } from "../services/api";
 import { SUCCESS_MESSAGES, ERROR_MESSAGES } from "../utils/constants";
@@ -173,6 +174,7 @@ const NAV_SECTIONS = [
     { key: "proyectos", label: "Proyectos" },
     { key: "habilidades", label: "Skills" },
     { key: "respuestas", label: "Preguntas frecuentes" },
+    { key: "faqs-avatar", label: "FAQs del avatar" },
 ];
 
 const toText = (value) => (value === null || typeof value === "undefined" ? "" : String(value));
@@ -860,6 +862,16 @@ export default function ProfilePage() {
                             <button type="button" className="add-btn" onClick={() => handleAddPregunta("respuestas")}>
                                 + Agregar pregunta y respuesta
                             </button>
+                        </ProfileSection>
+
+                        <ProfileSection
+                            sectionKey="faqs-avatar"
+                            title="Respuestas rápidas del avatar (FAQs)"
+                            hint="Preguntas que tu avatar responde instantáneamente sin llamar al modelo IA."
+                            isOpen={openSection === "faqs-avatar"}
+                            onToggle={() => toggleSection("faqs-avatar")}
+                        >
+                            {userId && <ProfileFaqSection candidateId={userId} />}
                         </ProfileSection>
 
                         <div className="save-panel">

@@ -10,13 +10,20 @@ import { OLLAMA_KEEP_ALIVE, OLLAMA_MODEL, OLLAMA_NUM_CTX, OLLAMA_TIMEOUT } from 
  * @param {string[]} embeddingResults - Resultados de búsqueda semántica (opcional)
  * @returns {string} Respuesta generada
  */
+// Opciones para respuesta completa (non-stream)
 const RESPONSE_OPTIONS = {
     model: OLLAMA_MODEL,
     keepAlive: OLLAMA_KEEP_ALIVE,
     temperature: 0.25,
-    numPredict: 400,
+    numPredict: 300,
     numCtx: Math.min(OLLAMA_NUM_CTX, 2048),
     timeout: OLLAMA_TIMEOUT,
+};
+
+// Opciones para streaming: menos tokens → primer token más rápido
+const STREAM_OPTIONS = {
+    ...RESPONSE_OPTIONS,
+    numPredict: 220,
 };
 
 export async function generateResponse(userName, question, data, embeddingResults = []) {
@@ -30,5 +37,5 @@ export async function generateResponse(userName, question, data, embeddingResult
  */
 export async function generateResponseStream(userName, question, data, embeddingResults = [], onChunk) {
     const prompt = buildResponsePrompt(userName, question, data, embeddingResults);
-    return generateStream(prompt, RESPONSE_OPTIONS, onChunk);
+    return generateStream(prompt, STREAM_OPTIONS, onChunk);
 }

@@ -1,0 +1,244 @@
+.faq-section {
+    display: flex;
+    flex-direction: column;
+    gap: 1.2rem;
+}
+
+.faq-section__header {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.faq-section__title {
+    margin: 0;
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--text);
+}
+
+.faq-section__desc {
+    margin: 0;
+    font-size: 0.85rem;
+    color: var(--muted);
+    line-height: 1.5;
+}
+
+.faq-section__error {
+    margin: 0;
+    padding: 0.6rem 1rem;
+    background: rgba(248, 113, 113, 0.1);
+    border: 1px solid rgba(248, 113, 113, 0.3);
+    border-radius: 8px;
+    color: var(--danger);
+    font-size: 0.88rem;
+}
+
+.faq-section__loading,
+.faq-section__empty {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.9rem;
+    padding: 1rem 0;
+}
+
+/* Formulario */
+.faq-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
+    background: var(--bg-accent);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 1.2rem 1.4rem;
+}
+
+.faq-form__row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+
+.faq-form__row--inline {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.8rem;
+    flex-wrap: wrap;
+}
+
+.faq-form__label {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.faq-form__input,
+.faq-form__textarea {
+    background: var(--surface-strong);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    padding: 0.55rem 0.8rem;
+    font-size: 0.92rem;
+    font-family: inherit;
+    resize: vertical;
+    transition: border-color 0.2s;
+    width: 100%;
+}
+
+.faq-form__input:focus,
+.faq-form__textarea:focus {
+    outline: none;
+    border-color: var(--primary);
+}
+
+.faq-form__input--small {
+    width: 80px;
+}
+
+.faq-form__hint {
+    font-size: 0.8rem;
+    color: var(--muted);
+}
+
+.faq-form__actions {
+    display: flex;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+}
+
+.faq-form__btn {
+    padding: 0.55rem 1.2rem;
+    border: none;
+    border-radius: 8px;
+    font-size: 0.88rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.2s;
+}
+
+.faq-form__btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.faq-form__btn--save {
+    background: var(--primary);
+    color: #fff;
+}
+
+.faq-form__btn--save:hover:not(:disabled) {
+    opacity: 0.85;
+}
+
+.faq-form__btn--cancel {
+    background: var(--surface-strong);
+    color: var(--muted);
+    border: 1px solid var(--border);
+}
+
+.faq-form__btn--cancel:hover {
+    color: var(--text);
+}
+
+/* Lista de FAQs */
+.faq-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+}
+
+.faq-item {
+    background: var(--bg-accent);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1rem 1.2rem;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    transition: border-color 0.2s;
+}
+
+.faq-item--inactive {
+    opacity: 0.5;
+}
+
+.faq-item__content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    min-width: 0;
+}
+
+.faq-item__question {
+    margin: 0;
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--text);
+    word-break: break-word;
+}
+
+.faq-item__answer {
+    margin: 0;
+    font-size: 0.85rem;
+    color: var(--muted);
+    line-height: 1.5;
+    word-break: break-word;
+}
+
+.faq-item__meta {
+    font-size: 0.75rem;
+    color: var(--muted);
+    opacity: 0.6;
+}
+
+.faq-item__actions {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    flex-shrink: 0;
+}
+
+.faq-item__btn {
+    padding: 0.3rem 0.8rem;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.2s;
+    white-space: nowrap;
+}
+
+.faq-item__btn--toggle {
+    background: rgba(96, 165, 250, 0.1);
+    color: var(--muted);
+    border: 1px solid var(--border);
+}
+
+.faq-item__btn--toggle.active {
+    background: rgba(52, 211, 153, 0.12);
+    color: var(--success);
+    border-color: rgba(52, 211, 153, 0.3);
+}
+
+.faq-item__btn--edit {
+    background: rgba(96, 165, 250, 0.12);
+    color: var(--primary);
+}
+
+.faq-item__btn--delete {
+    background: rgba(248, 113, 113, 0.1);
+    color: var(--danger);
+}
+
+.faq-item__btn:hover {
+    opacity: 0.8;
+}

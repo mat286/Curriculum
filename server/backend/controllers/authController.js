@@ -39,7 +39,15 @@ export async function loginWithGoogle(req, res, next) {
                 [given_name || '', family_name || '', email]
             );
             userId = result.insertId;
-            user = { id: userId, nombre: given_name || '', apellido: family_name || '', email };
+            user = {
+                id: userId,
+                nombre: given_name || '',
+                apellido: family_name || '',
+                email,
+                onboarding_step: 1,
+                onboarding_completed: 0,
+                is_public: 0,
+            };
             logger.info({ userId, email }, 'Nuevo usuario creado');
         } else {
             userId = rows[0].id;
@@ -48,6 +56,9 @@ export async function loginWithGoogle(req, res, next) {
                 nombre: rows[0].nombre || given_name || '',
                 apellido: rows[0].apellido || family_name || '',
                 email: rows[0].email,
+                onboarding_step: rows[0].onboarding_step ?? 1,
+                onboarding_completed: rows[0].onboarding_completed ?? 0,
+                is_public: rows[0].is_public ?? 0,
             };
         }
 

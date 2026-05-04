@@ -1,16 +1,19 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 import dotenv from 'dotenv';
 import logger from './utils/logger.js';
 import { errorHandler } from './middlewares/errorHandler.js';
 import { pool, ensureProfileSchema } from './config/db.js';
 import { validateEnv } from './config/validateEnv.js';
+import { globalLimiter } from './middlewares/rateLimiter.js';
 import authRoutes from './routes/auth.js';
 import userRoutes from './routes/user.js';
 import chatRoutes from './routes/chat.js';
 import candidatesRoutes from './routes/candidates.js';
 import candidateChatRoutes from './routes/candidateChat.js';
 import recruiterRoutes from './routes/recruiter.js';
+import metricsRoutes from './routes/metrics.js';
 import { warmupModel } from './services/ollamaService.js';
 import { OLLAMA_MODEL, OLLAMA_ROUTER_MODEL } from './config/ollama.js';
 
@@ -21,8 +24,25 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Middlewares globales
-app.use(cors());
-app.use(express.json({ limit: '1mb' }));
+app.use(helmet());
+
+const allowedOrigins = process.env.CORS_ORIGINS
+    ? process.env.CORS_ORIGINS.split(',').map(o => o.trim())
+    : ['http://localhost:5173', 'http://localhost:4173'];
+
+app.use(cors({
+    origin: (origin, callback) => {
+        // Permitir peticiones sin origin (ej. curl, Postman, mobile)
+        if (!origin || allowedOrigins.includes(origin)) {
+            callback(null, true);
+        } else {
+            callback(new Error(`CORS: origin '${origin}' no permitido`));
+        }
+    },
+    credentials: true,
+}));
+app.use(express.json({ limit: '10mb' }));
+app.use(globalLimiter);
 
 // Logging de requests
 if (process.env.NODE_ENV !== 'production') {
@@ -39,6 +59,7 @@ app.use('/api/chat', chatRoutes);
 app.use('/api/chat', candidateChatRoutes);
 app.use('/api/candidates', candidatesRoutes);
 app.use('/api/recruiter', recruiterRoutes);
+app.use('/api/metrics', metricsRoutes);
 
 // Health check — verifica MySQL y Ollama
 app.get('/health', async (req, res) => {
@@ -70,8 +91,8 @@ app.get('/health', async (req, res) => {
 });
 
 // 404
-app.use((req, res) => {
-    res.status(404).json({ error: 'Ruta no encontrada', path: req.path });
+app.use((_req, res) => {
+    res.status(404).json({ error: 'Ruta no encontrada' });
 });
 
 // Error handler centralizado

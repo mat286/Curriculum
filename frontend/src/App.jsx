@@ -5,15 +5,18 @@ import AppFooter from "./components/AppFooter";
 import LoginPage from "./components/LoginPage";
 import HomePage from "./pages/Home";
 import ProfilePage from "./pages/ProfilePage";
-import ChatPage from "./pages/Chat";
 import CandidateChatPage from "./pages/CandidateChatPage";
 import RecruiterPage from "./pages/RecruiterPage";
+import NotFoundPage from "./pages/NotFoundPage";
+import OnboardingPage from "./pages/OnboardingPage";
+import ErrorBoundary from "./components/ErrorBoundary";
 import ProtectedRoute from "./components/ProtectedRoute";
 import { useAuth } from "./context/AuthContext";
 import "./index.css";
+import AdminPage from "./pages/AdminPage";
 
 export default function App() {
-    const { isAuthenticated, loading, user } = useAuth();
+    const { isAuthenticated, loading, user, onboardingCompleted } = useAuth();
 
     if (loading) {
         return (
@@ -27,12 +30,29 @@ export default function App() {
     }
 
     return (
-        <>
+        <ErrorBoundary>
             <Navbar />
             <div className="main-container">
                 <Routes>
-                    <Route path="/login" element={isAuthenticated ? <Navigate to="/" replace /> : <LoginPage />} />
+                    <Route
+                        path="/login"
+                        element={
+                            isAuthenticated ? (
+                                <Navigate to={onboardingCompleted ? "/" : "/onboarding"} replace />
+                            ) : (
+                                <LoginPage />
+                            )
+                        }
+                    />
                     <Route path="/" element={<HomePage />} />
+                    <Route
+                        path="/onboarding"
+                        element={
+                            <ProtectedRoute>
+                                <OnboardingPage />
+                            </ProtectedRoute>
+                        }
+                    />
                     <Route
                         path="/perfil"
                         element={
@@ -59,6 +79,15 @@ export default function App() {
                             </ProtectedRoute>
                         }
                     />
+                       {/* Admin Telemetry Dashboard */}
+                       <Route
+                           path="/admin/telemetry"
+                           element={
+                               <ProtectedRoute>
+                                   <AdminPage />
+                               </ProtectedRoute>
+                           }
+                       />
                     {/* Chat con candidato específico — debe ir ÚLTIMO para no capturar otras rutas */}
                     <Route
                         path="/:id"
@@ -68,10 +97,10 @@ export default function App() {
                             </ProtectedRoute>
                         }
                     />
-                    <Route path="*" element={<Navigate to="/" replace />} />
+                    <Route path="*" element={<NotFoundPage />} />
                 </Routes>
             </div>
             <AppFooter />
-        </>
+        </ErrorBoundary>
     );
 }

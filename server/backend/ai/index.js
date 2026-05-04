@@ -34,8 +34,8 @@ if (AI_PROVIDER === 'ollama') {
             try {
                 return await gemini.generate(prompt, options);
             } catch (err) {
-                if (err.isQuotaError) {
-                    logger.warn('[Gemini→Ollama] Fallback activado por cuota excedida.');
+                if (err.isQuotaError || err.isNetworkError) {
+                    logger.warn('[Gemini→Ollama] Fallback activado por cuota excedida o error de red.');
                     return ollama.generate(prompt, options);
                 }
                 throw err;
@@ -50,8 +50,8 @@ if (AI_PROVIDER === 'ollama') {
             try {
                 return await gemini.generateJSON(prompt, fallback, options);
             } catch (err) {
-                if (err.isQuotaError) {
-                    logger.warn('[Gemini→Ollama] Fallback activado por cuota excedida (JSON).');
+                if (err.isQuotaError || err.isNetworkError) {
+                    logger.warn('[Gemini→Ollama] Fallback activado por cuota excedida o error de red (JSON).');
                     return ollama.generateJSON(prompt, fallback, options);
                 }
                 throw err;
@@ -66,8 +66,8 @@ if (AI_PROVIDER === 'ollama') {
             try {
                 return await gemini.generateStream(prompt, options, onChunk);
             } catch (err) {
-                if (err.isQuotaError) {
-                    logger.warn('[Gemini→Ollama] Fallback streaming activado por cuota excedida.');
+                if (err.isQuotaError || err.isNetworkError) {
+                    logger.warn('[Gemini→Ollama] Fallback streaming activado por cuota excedida o error de red.');
                     return ollama.generateStream(prompt, options, onChunk);
                 }
                 throw err;

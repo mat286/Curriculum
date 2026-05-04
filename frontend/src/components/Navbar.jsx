@@ -63,6 +63,11 @@ export default function Navbar() {
                                 <li className={location.pathname === `/\${user?.id}` ? "active" : ""}>
                                     <Link to={`/${user?.id}`}>Hablar con mi IA</Link>
                                 </li>
+                                   {user?.isAdmin && (
+                                       <li className={location.pathname === "/admin/telemetry" ? "active" : ""}>
+                                           <Link to="/admin/telemetry">📊 Telemetría</Link>
+                                       </li>
+                                   )}
                             </>
                         )}
                     </ul>

@@ -101,6 +101,7 @@ export default function CandidateChatPage() {
     const [messages, setMessages] = useState([]);
     const [input, setInput] = useState("");
     const [loading, setLoading] = useState(false);
+    const [loadingProfile, setLoadingProfile] = useState(true);
     const [error, setError] = useState("");
     const [showCVModal, setShowCVModal] = useState(false);
 
@@ -138,6 +139,7 @@ export default function CandidateChatPage() {
 
         const loadCandidate = async () => {
             setError("");
+            setLoadingProfile(true);
 
             try {
                 const [publicCandidatesResult, detailedProfileResult] = await Promise.allSettled([
@@ -171,6 +173,8 @@ export default function CandidateChatPage() {
                 if (mounted) {
                     setError("No se pudo cargar el perfil del candidato.");
                 }
+            } finally {
+                if (mounted) setLoadingProfile(false);
             }
         };
 
@@ -266,11 +270,25 @@ export default function CandidateChatPage() {
         <>
             <div className={`candidate-chat-page ${isOwnChat ? "own-mode" : "candidate-mode"}`}>
                 <aside className="candidate-chat-sidebar">
+                    {loadingProfile ? (
+                        <>
+                            <div className="skeleton skeleton-pill" />
+                            <div className="skeleton skeleton-title" />
+                            <div className="skeleton skeleton-line" />
+                            <div className="skeleton skeleton-line skeleton-line--short" />
+                            <div className="skeleton skeleton-tags">
+                                <div className="skeleton skeleton-tag" />
+                                <div className="skeleton skeleton-tag" />
+                                <div className="skeleton skeleton-tag" />
+                            </div>
+                        </>
+                    ) : (
+                        <>
                     <span className={`candidate-mode-pill ${isOwnChat ? "own" : "public"}`}>
                         {isOwnChat ? "Tu chat personal" : "Candidato evaluado"}
                     </span>
 
-                    <h1>{candidate?.nombre || "Cargando..."}</h1>
+                    <h1>{candidate?.nombre || "Sin nombre"}</h1>
                     {candidate?.puestoActual && <p className="candidate-chat-role">{candidate.puestoActual}</p>}
                     {candidate?.resumen && <p className="candidate-chat-summary">{candidate.resumen}</p>}
 
@@ -295,6 +313,8 @@ export default function CandidateChatPage() {
                         )}
                         <Link to="/">Volver al inicio</Link>
                     </div>
+                        </>
+                    )}
                 </aside>
 
                 <section className="candidate-chat-main">

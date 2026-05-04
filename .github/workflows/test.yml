@@ -1,0 +1,91 @@
+name: Test & Lint
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  backend-test:
+    runs-on: ubuntu-latest
+    
+    services:
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: entrevista_virtual_test
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+        ports:
+          - 3306:3306
+
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: 'server/backend/package-lock.json'
+      
+      - name: Install dependencies
+        run: |
+          cd server/backend
+          npm ci
+      
+      - name: Run ESLint
+        run: |
+          cd server/backend
+          npm run lint 2>/dev/null || echo "Warning: ESLint not configured yet"
+        continue-on-error: true
+      
+      - name: Run tests
+        env:
+          NODE_ENV: test
+          DB_HOST: localhost
+          DB_USER: root
+          DB_PASSWORD: root
+          DB_NAME: entrevista_virtual_test
+          GOOGLE_OAUTH_CLIENT_ID: test-client-id
+          GOOGLE_OAUTH_CLIENT_SECRET: test-secret
+          JWT_SECRET: test-secret-for-jwt-token-minimum-32-characters
+          GEMINI_API_KEY: test-key
+          OLLAMA_BASE_URL: http://localhost:11434
+        run: |
+          cd server/backend
+          npm test -- --reporter=verbose
+
+  frontend-lint:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: 'frontend/package-lock.json'
+      
+      - name: Install dependencies
+        run: |
+          cd frontend
+          npm ci
+      
+      - name: Run ESLint
+        run: |
+          cd frontend
+          npm run lint 2>/dev/null || echo "Warning: ESLint not configured yet"
+        continue-on-error: true
+      
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm run build

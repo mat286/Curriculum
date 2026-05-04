@@ -2,6 +2,12 @@ import { pool } from '../config/db.js';
 import { indexUserData } from '../services/embeddingService.js';
 import { ValidationError, AuthError, NotFoundError } from '../middlewares/errorHandler.js';
 import logger from '../utils/logger.js';
+import { getFullProfile } from '../services/dataService.js';
+import { CandidateContextSnapshotService } from '../modules/candidate/CandidateContextSnapshotService.js';
+
+const snapshotService = new CandidateContextSnapshotService();
+const ONBOARDING_MIN_STEP = 1;
+const ONBOARDING_MAX_STEP = 5;
 
 function validateUserId(paramId, authUserId) {
     const userId = parseInt(paramId, 10);
@@ -10,13 +16,52 @@ function validateUserId(paramId, authUserId) {
     return userId;
 }
 
+function normalizeBoolean(value) {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number') return value === 1;
+    const normalized = String(value || '').trim().toLowerCase();
+    return ['1', 'true', 'si', 'sí', 'yes'].includes(normalized);
+}
+
+function mapUserForClient(userRow) {
+    return {
+        id: userRow.id,
+        nombre: userRow.nombre || '',
+        apellido: userRow.apellido || '',
+        email: userRow.email || '',
+        puesto_actual: userRow.puesto_actual || '',
+        puestoActual: userRow.puesto_actual || '',
+        resumen: userRow.resumen || '',
+        is_public: userRow.is_public ? 1 : 0,
+        isPublic: !!userRow.is_public,
+        onboarding_step: userRow.onboarding_step || 1,
+        onboardingStep: userRow.onboarding_step || 1,
+        onboarding_completed: userRow.onboarding_completed ? 1 : 0,
+        onboardingCompleted: !!userRow.onboarding_completed,
+        profile_photo_url: userRow.profile_photo_url || null,
+        profilePhotoUrl: userRow.profile_photo_url || null,
+    };
+}
+
+async function fetchUserOnboardingState(conn, userId) {
+    const [rows] = await conn.query(
+        `SELECT id, nombre, apellido, email, puesto_actual, resumen, is_public,
+                onboarding_step, onboarding_completed, profile_photo_url
+         FROM usuarios
+         WHERE id = ?`,
+        [userId]
+    );
+
+    if (rows.length === 0) throw new NotFoundError('Usuario no encontrado');
+    return rows[0];
+}
+
 /**
  * GET /api/user/:id — Datos completos del perfil
  */
 export async function getProfile(req, res, next) {
     try {
         const userId = validateUserId(req.params.id, req.user.id);
-        const { getFullProfile } = await import('../services/dataService.js');
         const userData = await getFullProfile(userId);
 
         if (!userData) throw new NotFoundError('Usuario no encontrado');
@@ -242,6 +287,11 @@ export async function updateProfile(req, res, next) {
 
             await conn.commit();
 
+            // Compilar snapshot de contexto (no bloqueante)
+            getFullProfile(finalUserId)
+                .then(profile => snapshotService.upsertSnapshot(finalUserId, profile))
+                .catch(err => logger.warn({ err, userId: finalUserId }, 'Error actualizando snapshot de candidato'));
+
             // Reindexar embeddings en background (no bloqueante)
             indexUserData(finalUserId).catch(err =>
                 logger.warn({ err, userId: finalUserId }, 'Error reindexando embeddings post-actualización')
@@ -254,6 +304,165 @@ export async function updateProfile(req, res, next) {
         } finally {
             conn.release();
         }
+    } catch (error) {
+        next(error);
+    }
+}
+
+/**
+ * POST /api/user/:id/photo — Marca avance del paso de foto y opcionalmente guarda URL
+ * Nota: para mantener compatibilidad sin dependencias extra, este endpoint no procesa binarios multipart.
+ */
+export async function uploadOnboardingPhoto(req, res, next) {
+    try {
+        const userId = validateUserId(req.params.id, req.user.id);
+        const photoUrl = typeof req.body?.photoUrl === 'string' && req.body.photoUrl.trim()
+            ? req.body.photoUrl.trim()
+            : null;
+
+        await pool.query(
+            `UPDATE usuarios
+             SET onboarding_step = GREATEST(onboarding_step, 2),
+                 profile_photo_url = COALESCE(?, profile_photo_url)
+             WHERE id = ?`,
+            [photoUrl, userId]
+        );
+
+        const [rows] = await pool.query(
+            `SELECT id, nombre, apellido, email, puesto_actual, resumen, is_public,
+                    onboarding_step, onboarding_completed, profile_photo_url
+             FROM usuarios
+             WHERE id = ?`,
+            [userId]
+        );
+
+        if (rows.length === 0) throw new NotFoundError('Usuario no encontrado');
+
+        res.json({
+            success: true,
+            message: 'Paso de foto guardado correctamente',
+            photoUrl: rows[0].profile_photo_url || null,
+            user: mapUserForClient(rows[0]),
+        });
+    } catch (error) {
+        next(error);
+    }
+}
+
+/**
+ * PUT /api/user/:id/onboarding?step=N — Guarda progreso del onboarding
+ */
+export async function saveOnboardingStep(req, res, next) {
+    try {
+        const userId = validateUserId(req.params.id, req.user.id);
+        const step = Number.parseInt(req.query.step, 10);
+
+        if (!Number.isInteger(step) || step < ONBOARDING_MIN_STEP || step > ONBOARDING_MAX_STEP) {
+            throw new ValidationError('Paso de onboarding inválido');
+        }
+
+        const conn = await pool.getConnection();
+
+        try {
+            await conn.beginTransaction();
+
+            if (step === 3) {
+                const nombre = typeof req.body?.nombre === 'string' ? req.body.nombre.trim() : '';
+                const puestoActual = typeof req.body?.puestoActual === 'string' ? req.body.puestoActual.trim() : '';
+                const resumen = typeof req.body?.resumen === 'string' ? req.body.resumen.trim() : null;
+
+                if (nombre && (nombre.length < 2 || nombre.length > 100)) {
+                    throw new ValidationError('El nombre debe tener entre 2 y 100 caracteres');
+                }
+
+                if (puestoActual.length > 150) {
+                    throw new ValidationError('El puesto actual no puede superar los 150 caracteres');
+                }
+
+                await conn.query(
+                    `UPDATE usuarios
+                     SET nombre = COALESCE(NULLIF(?, ''), nombre),
+                         puesto_actual = COALESCE(NULLIF(?, ''), puesto_actual),
+                         resumen = ?
+                     WHERE id = ?`,
+                    [nombre, puestoActual, resumen, userId]
+                );
+            }
+
+            if (step === 5 && Object.prototype.hasOwnProperty.call(req.body || {}, 'isPublic')) {
+                const isPublic = normalizeBoolean(req.body.isPublic);
+                await conn.query('UPDATE usuarios SET is_public = ? WHERE id = ?', [isPublic ? 1 : 0, userId]);
+            }
+
+            await conn.query(
+                'UPDATE usuarios SET onboarding_step = GREATEST(onboarding_step, ?) WHERE id = ?',
+                [step, userId]
+            );
+
+            const userRow = await fetchUserOnboardingState(conn, userId);
+            await conn.commit();
+
+            res.json({
+                success: true,
+                step,
+                user: mapUserForClient(userRow),
+                message: 'Progreso de onboarding guardado',
+            });
+        } catch (error) {
+            await conn.rollback();
+            throw error;
+        } finally {
+            conn.release();
+        }
+    } catch (error) {
+        next(error);
+    }
+}
+
+/**
+ * PUT /api/user/:id/onboarding/complete — Marca onboarding como completo
+ */
+export async function completeOnboarding(req, res, next) {
+    try {
+        const userId = validateUserId(req.params.id, req.user.id);
+        const hasPublicPreference = Object.prototype.hasOwnProperty.call(req.body || {}, 'isPublic');
+        const isPublic = hasPublicPreference ? normalizeBoolean(req.body.isPublic) : null;
+
+        if (hasPublicPreference) {
+            await pool.query(
+                `UPDATE usuarios
+                 SET onboarding_completed = 1,
+                     onboarding_step = ?,
+                     is_public = ?
+                 WHERE id = ?`,
+                [ONBOARDING_MAX_STEP, isPublic ? 1 : 0, userId]
+            );
+        } else {
+            await pool.query(
+                `UPDATE usuarios
+                 SET onboarding_completed = 1,
+                     onboarding_step = ?
+                 WHERE id = ?`,
+                [ONBOARDING_MAX_STEP, userId]
+            );
+        }
+
+        const [rows] = await pool.query(
+            `SELECT id, nombre, apellido, email, puesto_actual, resumen, is_public,
+                    onboarding_step, onboarding_completed, profile_photo_url
+             FROM usuarios
+             WHERE id = ?`,
+            [userId]
+        );
+
+        if (rows.length === 0) throw new NotFoundError('Usuario no encontrado');
+
+        res.json({
+            success: true,
+            completed: true,
+            user: mapUserForClient(rows[0]),
+            message: 'Onboarding completado correctamente',
+        });
     } catch (error) {
         next(error);
     }

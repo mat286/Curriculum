@@ -4,8 +4,9 @@ import { LLMError } from '../middlewares/errorHandler.js';
 import logger from '../utils/logger.js';
 import { AIProvider } from './AIProvider.js';
 
-// Duración del cooldown cuando se detecta un error 429 (10 minutos)
-const QUOTA_COOLDOWN_MS = 10 * 60 * 1000;
+// Duración del cooldown cuando se detecta un error 429.
+// Configurable vía env para reducirlo en desarrollo (ej. GEMINI_COOLDOWN_MS=30000).
+const QUOTA_COOLDOWN_MS = parseInt(process.env.GEMINI_COOLDOWN_MS || String(10 * 60 * 1000), 10);
 
 /**
  * Extrae el retryDelay sugerido por la API de Gemini desde el mensaje de error.
@@ -53,6 +54,23 @@ export class GeminiProvider extends AIProvider {
     }
 
     /**
+     * Determina si el error es un fallo de red (sin conectividad a la API de Google).
+     */
+    isNetworkError(error) {
+        const msg = String(error?.message || error?.cause?.message || '');
+        return (
+            msg.includes('fetch failed') ||
+            msg.includes('Failed to fetch') ||
+            msg.includes('ECONNREFUSED') ||
+            msg.includes('ENOTFOUND') ||
+            msg.includes('ETIMEDOUT') ||
+            msg.includes('ECONNRESET') ||
+            msg.includes('network socket disconnected') ||
+            msg.includes('unable to verify the first certificate')
+        );
+    }
+
+    /**
      * Genera texto libre con Gemini.
      */
     async generate(prompt, options = {}) {
@@ -84,10 +102,15 @@ export class GeminiProvider extends AIProvider {
             if (this.isQuotaError(error)) {
                 const delay = parseRetryDelay(error.message);
                 this.activateQuotaCooldown(Math.max(delay + 5000, QUOTA_COOLDOWN_MS));
-                // Propagar como cuota excedida para que el fallback lo capture
                 const quotaErr = new LLMError(`[Gemini 429] Cuota excedida. ${error.message}`);
                 quotaErr.isQuotaError = true;
                 throw quotaErr;
+            }
+            if (this.isNetworkError(error)) {
+                logger.warn({ err: error.message }, '[Gemini] Error de red — activando fallback a Ollama');
+                const netErr = new LLMError(`[Gemini network] ${error.message}`);
+                netErr.isNetworkError = true;
+                throw netErr;
             }
             logger.error({ err: error }, 'Error comunicando con Gemini');
             throw new LLMError(`Error al generar respuesta: ${error.message}`);
@@ -124,13 +147,19 @@ export class GeminiProvider extends AIProvider {
             const text = result.response.text().trim();
             return JSON.parse(text);
         } catch (error) {
-            if (error instanceof LLMError && error.isQuotaError) throw error;
+            if (error instanceof LLMError && (error.isQuotaError || error.isNetworkError)) throw error;
             if (this.isQuotaError(error)) {
                 const delay = parseRetryDelay(error.message);
                 this.activateQuotaCooldown(Math.max(delay + 5000, QUOTA_COOLDOWN_MS));
                 const quotaErr = new LLMError(`[Gemini 429] Cuota excedida. ${error.message}`);
                 quotaErr.isQuotaError = true;
                 throw quotaErr;
+            }
+            if (this.isNetworkError(error)) {
+                logger.warn({ err: error.message }, '[Gemini] Error de red en generateJSON — activando fallback');
+                const netErr = new LLMError(`[Gemini network] ${error.message}`);
+                netErr.isNetworkError = true;
+                throw netErr;
             }
             if (error instanceof LLMError) {
                 logger.warn({ err: error.message }, 'Gemini generateJSON timeout');
@@ -179,6 +208,12 @@ export class GeminiProvider extends AIProvider {
                 const quotaErr = new LLMError(`[Gemini 429] Cuota excedida. ${error.message}`);
                 quotaErr.isQuotaError = true;
                 throw quotaErr;
+            }
+            if (this.isNetworkError(error)) {
+                logger.warn({ err: error.message }, '[Gemini] Error de red en streaming — activando fallback a Ollama');
+                const netErr = new LLMError(`[Gemini network] ${error.message}`);
+                netErr.isNetworkError = true;
+                throw netErr;
             }
             logger.error({ err: error }, 'Error en streaming con Gemini');
             throw new LLMError(`Error al generar respuesta streaming: ${error.message}`);
