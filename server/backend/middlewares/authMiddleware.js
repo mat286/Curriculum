@@ -23,6 +23,20 @@ export function autenticarUsuario(req, res, next) {
         });
     }
 
-    req.user = userData;
+    // Compatibilidad con tokens legacy que no tienen role
+    req.user = { ...userData, role: userData.role || 'candidate' };
     next();
+}
+
+export function requireRole(...roles) {
+    return (req, res, next) => {
+        const userRole = req.user?.role || 'candidate';
+        if (!roles.includes(userRole)) {
+            return res.status(403).json({
+                error: 'Acceso denegado',
+                requiredRole: roles,
+            });
+        }
+        next();
+    };
 }

@@ -1,8 +1,9 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import ProfileListSection from "../components/profile/ProfileListSection";
 import ProfileSection from "../components/profile/ProfileSection";
 import ProfileSidebar from "../components/profile/ProfileSidebar";
 import ProfileFaqSection from "../components/profile/ProfileFaqSection";
+import ProfileAIContextInspector from "../components/profile/ProfileAIContextInspector";
 import { useAuth } from "../context/AuthContext";
 import { userService } from "../services/api";
 import { SUCCESS_MESSAGES, ERROR_MESSAGES } from "../utils/constants";
@@ -166,6 +167,7 @@ const FAMILY_FIELDS = [
 ];
 
 const NAV_SECTIONS = [
+    { key: "inspector-ia", label: "Inspector IA" },
     { key: "datos", label: "Datos personales" },
     { key: "marca", label: "Marca profesional" },
     { key: "sobreMi", label: "Sobre mí" },
@@ -176,6 +178,16 @@ const NAV_SECTIONS = [
     { key: "respuestas", label: "Preguntas frecuentes" },
     { key: "faqs-avatar", label: "FAQs del avatar" },
 ];
+
+const SECTION_KEY_BY_FIELD = {
+    experiencias: "experiencia_laboral",
+    estudios: "educacion",
+    cursos: "cursos",
+    proyectos: "proyectos",
+    habilidades: "habilidades",
+    idiomas: "idiomas",
+    respuestas: "respuestas_entrevista",
+};
 
 const toText = (value) => (value === null || typeof value === "undefined" ? "" : String(value));
 const toBoolean = (value) => {
@@ -254,6 +266,111 @@ const createListItem = (field) => {
     };
 };
 
+const createInitialItemForField = (field) => {
+    if (field === "respuestas") {
+        return {
+            id: `${field}-${Date.now()}`,
+            pregunta: "Nueva pregunta frecuente",
+            respuesta: "Completa tu respuesta en primera persona.",
+        };
+    }
+
+    const baseItem = createListItem(field);
+    const requiredDefaults = {
+        experiencias: {
+            titulo: "Nuevo puesto",
+            organizacion: "Nueva empresa",
+        },
+        estudios: {
+            titulo: "Nuevo estudio",
+            organizacion: "Nueva institucion",
+        },
+        cursos: {
+            titulo: "Nuevo curso",
+        },
+        proyectos: {
+            titulo: "Nuevo proyecto",
+        },
+        habilidades: {
+            titulo: "Nueva habilidad",
+        },
+        idiomas: {
+            titulo: "Nuevo idioma",
+        },
+    };
+
+    return {
+        ...baseItem,
+        ...(requiredDefaults[field] || {}),
+    };
+};
+
+const buildSectionPayload = (field, item = {}) => {
+    switch (field) {
+        case "experiencias":
+            return {
+                empresa: item.organizacion || item.titulo,
+                puesto: item.titulo,
+                descripcion: item.descripcion,
+                fecha_inicio: item.fechaInicio || null,
+                fecha_fin: item.enCurso ? null : item.fechaFin || null,
+                actualmente: Boolean(item.enCurso),
+            };
+        case "estudios":
+            return {
+                institucion: item.organizacion || "Institucion",
+                titulo: item.titulo,
+                nivel: item.descripcion,
+                fecha_inicio: item.fechaInicio || null,
+                fecha_fin: item.enCurso ? null : item.fechaFin || null,
+            };
+        case "cursos":
+            return {
+                nombre: item.titulo,
+                institucion: item.organizacion || null,
+                descripcion: item.descripcion || null,
+                fecha_inicio: item.fechaInicio || null,
+                fecha_fin: item.enCurso ? null : item.fechaFin || null,
+                certificado_url: item.enlace || null,
+            };
+        case "proyectos":
+            return {
+                nombre: item.titulo,
+                descripcion: item.descripcion || null,
+                tecnologias: item.rol || null,
+                url: item.enlace || null,
+                fecha_inicio: item.fechaInicio || null,
+                fecha_fin: item.enCurso ? null : item.fechaFin || null,
+            };
+        case "habilidades":
+            return {
+                nombre: item.titulo,
+                categoria: item.categoria || null,
+                nivel: item.nivel || item.descripcion || null,
+            };
+        case "idiomas":
+            return {
+                idioma: item.titulo,
+                nivel: item.nivel || item.descripcion || null,
+            };
+        case "respuestas":
+            return {
+                pregunta: item.pregunta,
+                respuesta: item.respuesta,
+            };
+        default:
+            return item;
+    }
+};
+
+const normalizeSectionItemFromApi = (field, apiItem) => {
+    if (!apiItem) return null;
+    const [normalizedItem] = normalizeItems([apiItem], field);
+    return normalizedItem || null;
+};
+
+const isPersistedItemId = (id) => Number.isInteger(Number(id)) && Number(id) > 0;
+
 const normalizeProfileData = (data = {}) => {
     const about = Array.isArray(data.sobre_mi) ? data.sobre_mi[0] || {} : data.sobre_mi || {};
 
@@ -296,8 +413,21 @@ export default function ProfilePage() {
     const [openSection, setOpenSection] = useState("sobreMi");
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
+    const [isDirty, setIsDirty] = useState(false);
     const [error, setError] = useState(null);
     const [success, setSuccess] = useState(null);
+    const [actionFeedback, setActionFeedback] = useState(null);
+    const feedbackTimerRef = useRef(null);
+
+    const showActionFeedback = (message, type = "info") => {
+        setActionFeedback({ message, type });
+        window.clearTimeout(feedbackTimerRef.current);
+        feedbackTimerRef.current = window.setTimeout(() => setActionFeedback(null), 2400);
+    };
+
+    useEffect(() => {
+        return () => window.clearTimeout(feedbackTimerRef.current);
+    }, []);
 
     useEffect(() => {
         if (!userId) {
@@ -311,6 +441,7 @@ export default function ProfilePage() {
                 setError(null);
                 const data = await userService.getProfile(userId);
                 setProfile(normalizeProfileData(data));
+                setIsDirty(false);
             } catch (err) {
                 console.error("❌ Error cargando datos:", err);
                 setError(err.message || ERROR_MESSAGES.UNKNOWN_ERROR);
@@ -345,6 +476,135 @@ export default function ProfilePage() {
         return Math.round((completed / checklist.length) * 100);
     }, [profile]);
 
+    const aiInspectorData = useMemo(() => {
+        if (!profile) {
+            return {
+                sectionCompletion: [],
+                dataSummary: [],
+                criticalMissing: [],
+                qualityChecklist: [],
+            };
+        }
+
+        const safePercent = (done, total) => (total === 0 ? 0 : Math.round((done / total) * 100));
+
+        const validRespuestas = profile.respuestas.filter(
+            (item) => item.pregunta.trim().length > 0 && item.respuesta.trim().length > 0
+        );
+
+        const sectionCompletion = [
+            {
+                key: "datos",
+                label: "Datos personales",
+                value: safePercent(
+                    [
+                        profile.nombre,
+                        profile.apellido,
+                        profile.email,
+                        profile.telefono,
+                        profile.nacionalidad,
+                        profile.direccion,
+                    ].filter(Boolean).length,
+                    6
+                ),
+            },
+            {
+                key: "marca",
+                label: "Marca profesional",
+                value: safePercent(
+                    [
+                        profile.resumen,
+                        profile.puestoActual,
+                        profile.objetivoProfesional,
+                        profile.disponibilidad,
+                        profile.modalidadPreferida,
+                        profile.linkedinUrl || profile.githubUrl || profile.portfolioUrl,
+                    ].filter(Boolean).length,
+                    6
+                ),
+            },
+            {
+                key: "sobreMi",
+                label: "Sobre mi",
+                value: safePercent(profile.sobreMi.trim().length >= 90 ? 1 : 0, 1),
+            },
+            {
+                key: "experiencias",
+                label: "Experiencia",
+                value: safePercent(
+                    profile.experiencias.filter(
+                        (item) => item.titulo.trim() && item.descripcion.trim() && item.organizacion.trim()
+                    ).length,
+                    Math.max(profile.experiencias.length, 1)
+                ),
+            },
+            {
+                key: "habilidades",
+                label: "Habilidades",
+                value: safePercent(Math.min(profile.habilidades.length, 5), 5),
+            },
+            {
+                key: "respuestas",
+                label: "Preguntas y respuestas",
+                value: safePercent(Math.min(validRespuestas.length, 3), 3),
+            },
+        ];
+
+        const dataSummary = [
+            { key: "experiencias", label: "Experiencias", value: profile.experiencias.length },
+            { key: "estudios", label: "Estudios", value: profile.estudios.length },
+            { key: "proyectos", label: "Proyectos", value: profile.proyectos.length },
+            { key: "habilidades", label: "Habilidades", value: profile.habilidades.length },
+            { key: "idiomas", label: "Idiomas", value: profile.idiomas.length },
+            { key: "respuestas", label: "Respuestas preparadas", value: validRespuestas.length },
+        ];
+
+        const criticalMissing = [];
+
+        if (!profile.nombre || !profile.apellido) criticalMissing.push("Nombre y apellido");
+        if (!profile.telefono) criticalMissing.push("Telefono de contacto");
+        if (!profile.puestoActual) criticalMissing.push("Puesto actual o deseado");
+        if (!profile.sobreMi?.trim()) criticalMissing.push("Resumen sobre mi");
+        if (profile.experiencias.length === 0) criticalMissing.push("Al menos una experiencia laboral");
+        if (profile.habilidades.length < 3) criticalMissing.push("Minimo 3 habilidades clave");
+        if (validRespuestas.length < 2) criticalMissing.push("Minimo 2 respuestas de entrevista completas");
+
+        const qualityChecklist = [
+            {
+                key: "about-depth",
+                done: profile.sobreMi.trim().length >= 120,
+                title: "Resumen personal con profundidad",
+                help: "Recomendado: al menos 120 caracteres con fortalezas y enfoque profesional.",
+            },
+            {
+                key: "experience-evidence",
+                done: profile.experiencias.some((item) => item.descripcion.trim().length >= 90),
+                title: "Experiencia con evidencia de impacto",
+                help: "Incluye logros medibles o resultados para mejorar la credibilidad del avatar.",
+            },
+            {
+                key: "goal-alignment",
+                done: profile.objetivoProfesional.trim().length >= 80,
+                title: "Objetivo profesional claro",
+                help: "Ayuda a que la IA mantenga consistencia al hablar de motivacion y busqueda.",
+            },
+            {
+                key: "faq-coverage",
+                done: validRespuestas.length >= 3,
+                title: "Cobertura de preguntas frecuentes",
+                help: "Con 3 o mas respuestas, el chat resuelve dudas comunes con menos ambiguedad.",
+            },
+            {
+                key: "links-proof",
+                done: Boolean(profile.linkedinUrl || profile.githubUrl || profile.portfolioUrl),
+                title: "Enlaces de respaldo",
+                help: "Agregar LinkedIn, GitHub o portfolio mejora validacion y confianza del recruiter.",
+            },
+        ];
+
+        return { sectionCompletion, dataSummary, criticalMissing, qualityChecklist };
+    }, [profile]);
+
     const toggleSection = (section) => {
         setOpenSection((current) => (current === section ? null : section));
     };
@@ -365,6 +625,7 @@ export default function ProfilePage() {
     const handleChange = (e) => {
         const { name, value } = e.target;
         setProfile((current) => ({ ...current, [name]: value }));
+        setIsDirty(true);
     };
 
     const handleFamilyChange = (e) => {
@@ -373,20 +634,88 @@ export default function ProfilePage() {
             ...current,
             familia: { ...current.familia, [name]: value },
         }));
+        setIsDirty(true);
     };
 
-    const handleAdd = (field) => {
-        setProfile((current) => ({
-            ...current,
-            [field]: [...current[field], createListItem(field)],
-        }));
+    const handleAdd = async (field) => {
+        const singularLabel = LIST_SECTIONS.find((section) => section.field === field)?.singular || "elemento";
+        const newItem = createInitialItemForField(field);
+        const sectionKey = SECTION_KEY_BY_FIELD[field];
+
+        if (!userId || !sectionKey) {
+            setProfile((current) => ({
+                ...current,
+                [field]: [...current[field], createListItem(field)],
+            }));
+            setIsDirty(true);
+            showActionFeedback(`Nuevo ${singularLabel} agregado.`, "success");
+            return;
+        }
+
+        showActionFeedback(`Creando ${singularLabel}...`, "info");
+
+        try {
+            const payload = buildSectionPayload(field, newItem);
+            const result = await userService.createSectionItem(userId, sectionKey, payload);
+            const createdItem = normalizeSectionItemFromApi(field, result?.item) || newItem;
+
+            setProfile((current) => ({
+                ...current,
+                [field]: [...current[field], createdItem],
+            }));
+            showActionFeedback(`Nuevo ${singularLabel} agregado y sincronizado.`, "success");
+        } catch (err) {
+            console.error(`Error creando item de ${field}:`, err);
+            setProfile((current) => ({
+                ...current,
+                [field]: [...current[field], createListItem(field)],
+            }));
+            setIsDirty(true);
+            showActionFeedback(
+                `No se pudo sincronizar al instante. Puedes completar y guardar al final.`,
+                "warning"
+            );
+        }
     };
 
-    const handleAddPregunta = (field) => {
-        setProfile((current) => ({
-            ...current,
-            [field]: [...current[field], { id: `${field}-${Date.now()}`, pregunta: "", respuesta: "" }],
-        }));
+    const handleAddPregunta = async (field) => {
+        const newItem = createInitialItemForField(field);
+        const sectionKey = SECTION_KEY_BY_FIELD[field];
+
+        if (!userId || !sectionKey) {
+            setProfile((current) => ({
+                ...current,
+                [field]: [...current[field], { id: `${field}-${Date.now()}`, pregunta: "", respuesta: "" }],
+            }));
+            setIsDirty(true);
+            showActionFeedback("Nuevo bloque de pregunta y respuesta agregado.", "success");
+            return;
+        }
+
+        showActionFeedback("Creando bloque de pregunta y respuesta...", "info");
+
+        try {
+            const payload = buildSectionPayload(field, newItem);
+            const result = await userService.createSectionItem(userId, sectionKey, payload);
+            const createdItem = normalizeSectionItemFromApi(field, result?.item) || newItem;
+
+            setProfile((current) => ({
+                ...current,
+                [field]: [...current[field], createdItem],
+            }));
+            showActionFeedback("Nuevo bloque agregado y sincronizado.", "success");
+        } catch (err) {
+            console.error("Error creando pregunta/respuesta:", err);
+            setProfile((current) => ({
+                ...current,
+                [field]: [...current[field], { id: `${field}-${Date.now()}`, pregunta: "", respuesta: "" }],
+            }));
+            setIsDirty(true);
+            showActionFeedback(
+                "No se pudo sincronizar al instante. Puedes completar y guardar al final.",
+                "warning"
+            );
+        }
     };
 
     const handleItemChange = (field, id, name, value) => {
@@ -394,13 +723,44 @@ export default function ProfilePage() {
             ...current,
             [field]: current[field].map((item) => (item.id === id ? { ...item, [name]: value } : item)),
         }));
+        setIsDirty(true);
     };
 
-    const handleRemove = (field, id) => {
-        setProfile((current) => ({
-            ...current,
-            [field]: current[field].filter((item) => item.id !== id),
-        }));
+    const handleRemove = async (field, id) => {
+        const sectionKey = SECTION_KEY_BY_FIELD[field];
+        const shouldDeleteRemotely = Boolean(userId && sectionKey && isPersistedItemId(id));
+        let removedItem = null;
+
+        setProfile((current) => {
+            removedItem = current[field].find((item) => item.id === id) || null;
+            return {
+                ...current,
+                [field]: current[field].filter((item) => item.id !== id),
+            };
+        });
+
+        if (!shouldDeleteRemotely) {
+            setIsDirty(true);
+            showActionFeedback("Elemento eliminado de la seccion.", "warning");
+            return;
+        }
+
+        showActionFeedback("Eliminando elemento...", "info");
+
+        try {
+            await userService.deleteSectionItem(userId, sectionKey, Number(id));
+            showActionFeedback("Elemento eliminado y sincronizado.", "success");
+        } catch (err) {
+            console.error(`Error eliminando item de ${field}:`, err);
+            if (removedItem) {
+                setProfile((current) => ({
+                    ...current,
+                    [field]: [...current[field], removedItem],
+                }));
+            }
+            setError(err.message || "No se pudo eliminar el elemento.");
+            showActionFeedback("No se pudo eliminar en servidor. Se restauró el item.", "warning");
+        }
     };
 
     const handleLoadFaqTemplates = () => {
@@ -417,6 +777,8 @@ export default function ProfilePage() {
                 respuestas: [...current.respuestas, ...suggestions],
             };
         });
+        setIsDirty(true);
+        showActionFeedback("Se cargaron preguntas sugeridas para completar respuestas.", "success");
     };
 
     const handleSubmit = async (e) => {
@@ -435,6 +797,7 @@ export default function ProfilePage() {
             const result = await userService.updateProfile(userId, profile);
             if (result.success) {
                 setSuccess(SUCCESS_MESSAGES.PROFILE_SAVED);
+                setIsDirty(false);
                 setTimeout(() => setSuccess(null), 3000);
             } else {
                 setError(result.message || "Error al guardar datos");
@@ -502,7 +865,7 @@ export default function ProfilePage() {
 
                     <div className="profile-summary-card">
                         <span className={`summary-status ${saving ? "is-saving" : ""}`}>
-                            {saving ? "Guardando cambios..." : "Edición activa"}
+                            {saving ? "Guardando cambios..." : isDirty ? "Cambios sin guardar" : "Sin cambios pendientes"}
                         </span>
                         <strong>{completion}% completado</strong>
                         <div className="progress-track" aria-hidden="true">
@@ -516,11 +879,21 @@ export default function ProfilePage() {
                     </div>
                 </section>
 
+                {actionFeedback && <div className={`info-message is-${actionFeedback.type}`}>{actionFeedback.message}</div>}
+
                 {error && <div className="error-message">{error}</div>}
                 {success && <div className="success-message">{success}</div>}
 
                 <div className="profile-layout">
                     <div className="profile-main">
+                        <ProfileAIContextInspector
+                            completion={completion}
+                            sectionCompletion={aiInspectorData.sectionCompletion}
+                            dataSummary={aiInspectorData.dataSummary}
+                            criticalMissing={aiInspectorData.criticalMissing}
+                            qualityChecklist={aiInspectorData.qualityChecklist}
+                        />
+
                         <ProfileSection
                             sectionKey="datos"
                             title="Datos personales"
@@ -829,13 +1202,22 @@ export default function ProfilePage() {
 
                             {profile.respuestas.length === 0 && (
                                 <div className="empty-state">
-                                    Añade respuestas base para que tu preparación sea más consistente.
+                                    <strong>Prepara tus respuestas base</strong>
+                                    <p>
+                                        Incluye preguntas tipicas de entrevista para que el chat responda con mayor
+                                        consistencia y menos ambiguedad.
+                                    </p>
                                 </div>
                             )}
 
                             {profile.respuestas.map((item) => (
                                 <div key={item.id} className="sub-item">
                                     <div className="sub-item-header">
+                                        <span
+                                            className={`item-quality ${(item.pregunta.trim() && item.respuesta.trim()) ? "item-quality--ok" : "item-quality--warn"}`}
+                                        >
+                                            {(item.pregunta.trim() && item.respuesta.trim()) ? "Respuesta lista" : "Completar respuesta"}
+                                        </span>
                                         <input
                                             placeholder="Pregunta frecuente"
                                             value={item.pregunta}
@@ -843,11 +1225,11 @@ export default function ProfilePage() {
                                         />
                                         <button
                                             type="button"
-                                            className="remove-btn"
+                                            className="item-action-btn item-action-btn--danger"
                                             onClick={() => handleRemove("respuestas", item.id)}
                                             title="Eliminar"
                                         >
-                                            ×
+                                            Eliminar
                                         </button>
                                     </div>
 

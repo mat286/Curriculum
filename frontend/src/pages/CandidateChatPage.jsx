@@ -1,8 +1,11 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import CVModal from "../components/CVModal";
 import { useAuth } from "../context/AuthContext";
 import { candidateChatService, candidatesService, userService } from "../services/api";
+import { useStreamMetrics } from "../hooks/useStreamMetrics";
+import StreamingIndicator from "../components/StreamingIndicator";
+import { toText, toBoolean, normalizeProfileItems as normalizeRichItems } from "../utils/profileNormalizers";
 import "./CandidateChatPage.css";
 
 const buildInitialMessage = (name = "este candidato", isOwnChat = false) => ({
@@ -12,36 +15,6 @@ const buildInitialMessage = (name = "este candidato", isOwnChat = false) => ({
         ? `Hola ${name}. Estoy listo para ayudarte a practicar entrevistas, resumir tu experiencia y mejorar cómo presentas tu perfil.`
         : `Hola. Soy el avatar de ${name}. Podés preguntarme sobre mi experiencia, skills, proyectos o forma de trabajo.`,
 });
-
-const toText = (value) => (value === null || typeof value === "undefined" ? "" : String(value));
-const toBoolean = (value) => value === true || value === 1 || value === "1" || value === "true";
-
-const normalizeRichItems = (items) => {
-    if (!Array.isArray(items)) return [];
-
-    return items
-        .map((item, index) => {
-            if (typeof item === "string") {
-                return { id: `item-${index}`, titulo: item };
-            }
-
-            return {
-                id: item?.id ?? `item-${index}`,
-                titulo: toText(item?.titulo || item?.nombre || item?.idioma || item?.puesto || item?.empresa || item?.institucion),
-                descripcion: toText(item?.descripcion || item?.detalle || item?.nivel || item?.categoria || item?.tecnologias),
-                organizacion: toText(item?.organizacion || item?.empresa || item?.institucion || item?.entidad),
-                ubicacion: toText(item?.ubicacion || item?.location),
-                fechaInicio: toText(item?.fechaInicio || item?.fecha_inicio || item?.desde).slice(0, 7),
-                fechaFin: toText(item?.fechaFin || item?.fecha_fin || item?.hasta).slice(0, 7),
-                enCurso: toBoolean(item?.enCurso ?? item?.en_curso ?? item?.actual),
-                enlace: toText(item?.enlace || item?.url || item?.link || item?.github || item?.demo_url),
-                nivel: toText(item?.nivel || item?.level),
-                categoria: toText(item?.categoria || item?.category),
-                rol: toText(item?.rol),
-            };
-        })
-        .filter((item) => item.titulo || item.descripcion);
-};
 
 const normalizeTagItems = (items) => {
     if (!Array.isArray(items)) return [];
@@ -93,17 +66,59 @@ const normalizeCandidateProfile = (candidate = {}, data = {}) => {
     };
 };
 
+const STREAM_STATUS_LABELS = {
+    thinking: "Pensando",
+    retrieving: "Recuperando contexto",
+    generating: "Generando respuesta",
+    finalizing: "Finalizando",
+};
+
+const normalizeStreamStatus = (value) => {
+    const text = toText(value).toLowerCase();
+    if (["thinking", "retrieving", "generating", "finalizing"].includes(text)) {
+        return text;
+    }
+    return "";
+};
+
+const roundMs = (value) => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 0) return null;
+    return Math.round(parsed);
+};
+
 export default function CandidateChatPage() {
     const { id } = useParams();
     const { user } = useAuth();
+    const { metrics, handleStreamEvent, reset: resetMetrics } = useStreamMetrics();
     const [candidate, setCandidate] = useState(null);
     const [profileForCV, setProfileForCV] = useState(null);
     const [messages, setMessages] = useState([]);
     const [input, setInput] = useState("");
     const [loading, setLoading] = useState(false);
+    const [streamStatus, setStreamStatus] = useState("thinking");
     const [loadingProfile, setLoadingProfile] = useState(true);
     const [error, setError] = useState("");
+    const [lastFailedMessage, setLastFailedMessage] = useState("");
     const [showCVModal, setShowCVModal] = useState(false);
+    const [retryCount, setRetryCount] = useState(0);
+    const [streamMetrics, setStreamMetrics] = useState({
+        requestId: "",
+        routed: "",
+        cached: false,
+        backendTtfbMs: null,
+        frontendTtfbMs: null,
+        totalMs: null,
+        semanticMs: null,
+        promptChars: null,
+    });
+
+    const abortControllerRef = useRef(null);
+    const tokenBufferRef = useRef("");
+    const flushTimerRef = useRef(null);
+    const activeStreamingMsgIdRef = useRef("");
+    const streamPerfRef = useRef({ startedAt: 0, firstTokenAt: 0, requestId: "" });
+    const retryTimeoutRef = useRef(null);
 
     const storageKey = useMemo(() => `cv-chat-history:candidate:${id}`, [id]);
     const currentUserId = user?.id || user?.userId || user?.googleId;
@@ -133,6 +148,23 @@ export default function CandidateChatPage() {
             localStorage.setItem(storageKey, JSON.stringify(messages));
         }
     }, [messages, storageKey]);
+
+    useEffect(() => {
+        return () => {
+            if (flushTimerRef.current) {
+                clearTimeout(flushTimerRef.current);
+                flushTimerRef.current = null;
+            }
+            if (retryTimeoutRef.current) {
+                clearTimeout(retryTimeoutRef.current);
+                retryTimeoutRef.current = null;
+            }
+            if (abortControllerRef.current) {
+                abortControllerRef.current.abort();
+                abortControllerRef.current = null;
+            }
+        };
+    }, []);
 
     useEffect(() => {
         let mounted = true;
@@ -185,32 +217,142 @@ export default function CandidateChatPage() {
         };
     }, [id, isOwnChat]);
 
-    const handleSend = async () => {
-        const text = input.trim();
+    const flushBufferedTokens = useCallback((streamingMsgId) => {
+        const chunk = tokenBufferRef.current;
+        if (!chunk) return;
+
+        tokenBufferRef.current = "";
+        setMessages((current) =>
+            current.map((m) => (m.id === streamingMsgId ? { ...m, content: m.content + chunk } : m))
+        );
+    }, []);
+
+    const scheduleTokenFlush = useCallback((streamingMsgId) => {
+        if (flushTimerRef.current) return;
+
+        const bufferSize = tokenBufferRef.current.length;
+        const delay = bufferSize > 80 ? 40 : bufferSize > 20 ? 50 : 60;
+
+        flushTimerRef.current = setTimeout(() => {
+            flushTimerRef.current = null;
+            flushBufferedTokens(streamingMsgId);
+            if (tokenBufferRef.current.length > 0) {
+                scheduleTokenFlush(streamingMsgId);
+            }
+        }, delay);
+    }, [flushBufferedTokens]);
+
+    const finishStreamingMessage = useCallback((streamingMsgId, options = {}) => {
+        const { keepLoading = false, status = "thinking" } = options;
+
+        if (flushTimerRef.current) {
+            clearTimeout(flushTimerRef.current);
+            flushTimerRef.current = null;
+        }
+
+        flushBufferedTokens(streamingMsgId);
+        activeStreamingMsgIdRef.current = "";
+
+        setMessages((current) =>
+            current.map((m) => (m.id === streamingMsgId ? { ...m, streaming: false } : m))
+        );
+
+        setStreamStatus(status);
+        if (!keepLoading) setLoading(false);
+    }, [flushBufferedTokens]);
+
+    const applyStreamEventStatus = useCallback((eventPayload) => {
+        const explicitStatus = normalizeStreamStatus(
+            eventPayload?.status || eventPayload?.phase || eventPayload?.payload?.status || eventPayload?.payload?.phase
+        );
+        if (explicitStatus) {
+            setStreamStatus(explicitStatus);
+            return;
+        }
+
+        const eventType = toText(eventPayload?.eventType || eventPayload?.type).toLowerCase();
+        if (eventType === "ack") {
+            setStreamStatus("thinking");
+            return;
+        }
+
+        if (eventType === "status") {
+            const fallbackStatus = normalizeStreamStatus(eventPayload?.value || eventPayload?.name);
+            if (fallbackStatus) setStreamStatus(fallbackStatus);
+        }
+    }, []);
+
+    const handleSend = async (messageOverride = "") => {
+        const text = (messageOverride || input).trim();
         if (!text || loading) return;
 
         const streamingMsgId = `a-stream-${Date.now()}`;
+        activeStreamingMsgIdRef.current = streamingMsgId;
+        tokenBufferRef.current = "";
+        streamPerfRef.current = { startedAt: Date.now(), firstTokenAt: 0, requestId: "" };
+
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+        }
+
+        const controller = new AbortController();
+        abortControllerRef.current = controller;
 
         setMessages((current) => [
             ...current,
             { id: `u-${Date.now()}`, role: "user", content: text },
             { id: streamingMsgId, role: "assistant", content: "", streaming: true },
         ]);
-        setInput("");
+        if (!messageOverride) setInput("");
         setLoading(true);
+        setStreamStatus("thinking");
         setError("");
+        setLastFailedMessage("");
+        setRetryCount(0);
+        resetMetrics();
+        setStreamMetrics({
+            requestId: "",
+            routed: "",
+            cached: false,
+            backendTtfbMs: null,
+            frontendTtfbMs: null,
+            totalMs: null,
+            semanticMs: null,
+            promptChars: null,
+        });
 
         await candidateChatService.askStream(
             id,
             text,
             // onToken
             (token) => {
-                setMessages((current) =>
-                    current.map((m) => (m.id === streamingMsgId ? { ...m, content: m.content + token } : m))
-                );
+                if (!streamPerfRef.current.firstTokenAt) {
+                    const firstTokenAt = Date.now();
+                    streamPerfRef.current.firstTokenAt = firstTokenAt;
+                    const frontendTtfbMs = roundMs(firstTokenAt - streamPerfRef.current.startedAt);
+                    setStreamMetrics((current) => ({ ...current, frontendTtfbMs }));
+                }
+                tokenBufferRef.current += token;
+                setStreamStatus("generating");
+                scheduleTokenFlush(streamingMsgId);
             },
             // onError
             (err) => {
+                const isAbort = err?.name === "AbortError";
+                finishStreamingMessage(streamingMsgId);
+
+                if (isAbort) {
+                    setMessages((current) =>
+                        current.map((m) =>
+                            m.id === streamingMsgId && !m.content
+                                ? { ...m, content: "Generación cancelada.", streaming: false }
+                                : m
+                        )
+                    );
+                    setError("");
+                    return;
+                }
+
                 setMessages((current) =>
                     current.map((m) =>
                         m.id === streamingMsgId
@@ -219,16 +361,49 @@ export default function CandidateChatPage() {
                     )
                 );
                 setError(err.message || "No se pudo enviar el mensaje.");
-                setLoading(false);
+                setLastFailedMessage(text);
             },
             // onDone
             () => {
-                setMessages((current) =>
-                    current.map((m) => (m.id === streamingMsgId ? { ...m, streaming: false } : m))
-                );
-                setLoading(false);
+                setStreamStatus("finalizing");
+                finishStreamingMessage(streamingMsgId, { status: "thinking" });
             },
+            {
+                signal: controller.signal,
+                onEvent: (eventPayload) => {
+                    // Delegar al hook de métricas
+                    handleStreamEvent(eventPayload);
+                    
+                    applyStreamEventStatus(eventPayload);
+
+                    const eventType = toText(eventPayload?.eventType || eventPayload?.type).toLowerCase();
+                    const payload = eventPayload?.payload && typeof eventPayload.payload === "object" ? eventPayload.payload : {};
+                    const requestId = toText(eventPayload?.requestId || payload.requestId);
+
+                    if (eventType === "ack" && requestId) {
+                        streamPerfRef.current.requestId = requestId;
+                        setStreamMetrics((current) => ({ ...current, requestId }));
+                        return;
+                    }
+
+                    if (eventType === "metrics") {
+                        setStreamMetrics((current) => ({
+                            ...current,
+                            requestId: requestId || current.requestId || streamPerfRef.current.requestId,
+                            routed: toText(payload.routed || eventPayload?.routed || current.routed),
+                            cached: payload.cached ?? eventPayload?.cached ?? current.cached,
+                            backendTtfbMs: roundMs(payload.ttfbMs ?? eventPayload?.ttfbMs) ?? current.backendTtfbMs,
+                            totalMs: roundMs(payload.totalMs ?? eventPayload?.totalMs) ?? current.totalMs,
+                            semanticMs: roundMs(payload.semanticMs ?? eventPayload?.semanticMs) ?? current.semanticMs,
+                            promptChars: Number.isFinite(Number(payload.promptChars ?? eventPayload?.promptChars))
+                                ? Number(payload.promptChars ?? eventPayload?.promptChars)
+                                : current.promptChars,
+                        }));
+                    }
+                },
+            }
         ).catch((unexpectedErr) => {
+            finishStreamingMessage(streamingMsgId);
             setMessages((current) =>
                 current.map((m) =>
                     m.id === streamingMsgId
@@ -236,8 +411,37 @@ export default function CandidateChatPage() {
                         : m
                 )
             );
-            setLoading(false);
+            setError(unexpectedErr.message || "Error inesperado.");
+            setLastFailedMessage(text);
+        }).finally(() => {
+            abortControllerRef.current = null;
         });
+    };
+
+    const handleCancelStreaming = () => {
+        if (!loading || !abortControllerRef.current) return;
+        abortControllerRef.current.abort();
+        abortControllerRef.current = null;
+    };
+
+    const handleRetryLastMessage = () => {
+        if (!lastFailedMessage || loading) return;
+
+        // Exponential backoff: 1s, 2s, 4s
+        const backoffDelays = [1000, 2000, 4000];
+        const delay = backoffDelays[Math.min(retryCount, backoffDelays.length - 1)];
+
+        setError(`Reintentando en ${Math.round(delay / 1000)}s...`);
+
+        if (retryTimeoutRef.current) {
+            clearTimeout(retryTimeoutRef.current);
+        }
+
+        retryTimeoutRef.current = setTimeout(() => {
+            retryTimeoutRef.current = null;
+            setRetryCount((prev) => prev + 1);
+            handleSend(lastFailedMessage);
+        }, delay);
     };
 
     const handleKeyDown = (event) => {
@@ -327,12 +531,54 @@ export default function CandidateChatPage() {
                                     ? "Practica respuestas, revisa tu CV y mejora cómo te presentas en una entrevista."
                                     : "Consulta experiencia, skills y compatibilidad del perfil antes de tomar una decisión."}
                             </p>
+                            
+                            {/* StreamingIndicator integrado */}
+                            {loading && (
+                                <StreamingIndicator
+                                    status={metrics.status}
+                                    ttft={metrics.ttft}
+                                    thinkingMs={metrics.thinkingMs}
+                                    errorMessage={metrics.errorMessage}
+                                    onRetry={handleRetryLastMessage}
+                                />
+                            )}
+
+                            {(streamMetrics.requestId || streamMetrics.totalMs || streamMetrics.backendTtfbMs || streamMetrics.frontendTtfbMs) && (
+                                <div className="candidate-stream-metrics">
+                                    {streamMetrics.requestId && <span className="candidate-stream-metric">req: {streamMetrics.requestId.slice(0, 8)}</span>}
+                                    {streamMetrics.frontendTtfbMs !== null && <span className="candidate-stream-metric">TTFT UX: {streamMetrics.frontendTtfbMs}ms</span>}
+                                    {streamMetrics.backendTtfbMs !== null && <span className="candidate-stream-metric">TTFB BE: {streamMetrics.backendTtfbMs}ms</span>}
+                                    {streamMetrics.totalMs !== null && <span className="candidate-stream-metric">Total: {streamMetrics.totalMs}ms</span>}
+                                    {streamMetrics.routed && <span className="candidate-stream-metric">route: {streamMetrics.routed}</span>}
+                                    {streamMetrics.cached ? <span className="candidate-stream-metric">cache: hit</span> : null}
+                                </div>
+                            )}
                         </div>
 
                         <div className="candidate-chat-topbar-actions">
                             <button type="button" className="candidate-cv-button" onClick={() => setShowCVModal(true)}>
                                 📄 Ver CV
                             </button>
+                            {loading ? (
+                                <button
+                                    type="button"
+                                    className="candidate-cancel-button"
+                                    onClick={handleCancelStreaming}
+                                    title="Cancelar respuesta en curso"
+                                >
+                                    Cancelar
+                                </button>
+                            ) : (
+                                <button
+                                    type="button"
+                                    className="candidate-retry-button"
+                                    onClick={handleRetryLastMessage}
+                                    disabled={!lastFailedMessage}
+                                    title="Reintentar último mensaje"
+                                >
+                                    Reintentar
+                                </button>
+                            )}
                             <button type="button" className="candidate-clear-button" onClick={handleClearHistory} title="Limpiar historial">
                                 ↺ Limpiar
                             </button>

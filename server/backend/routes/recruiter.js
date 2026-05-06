@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
-import { autenticarUsuario } from '../middlewares/authMiddleware.js';
+import { autenticarUsuario, requireRole } from '../middlewares/authMiddleware.js';
 import { recruiterChat } from '../controllers/recruiterController.js';
 
 const recruiterLimiter = rateLimit({
@@ -18,6 +18,6 @@ const recruiterLimiter = rateLimit({
 const router = Router();
 
 // POST /api/recruiter/chat
-router.post('/chat', autenticarUsuario, recruiterLimiter, recruiterChat);
+router.post('/chat', autenticarUsuario, requireRole('recruiter'), recruiterLimiter, recruiterChat);
 
 export default router;

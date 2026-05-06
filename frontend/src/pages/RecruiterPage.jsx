@@ -44,7 +44,12 @@ export default function RecruiterPage() {
                 setResults(response.candidates || []);
             }
         } catch (err) {
-            setError(err.message || "No se pudo completar la búsqueda.");
+            const is403 = err.message?.toLowerCase().includes('autorizado') || err.response?.status === 403;
+            if (is403) {
+                setError('Tu cuenta no tiene permisos de recruiter. Ve a Configuración para activar el modo recruiter.');
+            } else {
+                setError(err.message || "No se pudo completar la búsqueda.");
+            }
         } finally {
             setLoading(false);
         }

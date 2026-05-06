@@ -1,0 +1,327 @@
+/* ──────────────────────────────────────────────────────────────── */
+/* StreamingIndicator — Visual feedback para estado de streaming   */
+/* ──────────────────────────────────────────────────────────────── */
+
+:root {
+  --streaming-primary: var(--primary, #3b82f6);
+  --streaming-secondary: var(--secondary, #8b5cf6);
+  --streaming-success: var(--success, #10b981);
+  --streaming-error: var(--error, #ef4444);
+  --streaming-text: var(--text, #ffffff);
+  --streaming-surface: var(--surface, rgba(15, 23, 42, 0.9));
+}
+
+/* Contenedor base */
+.streaming-indicator {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--streaming-text);
+  animation: streaming-fade-in 300ms ease-out;
+  will-change: opacity;
+  backface-visibility: hidden;
+  perspective: 1000px;
+}
+
+@keyframes streaming-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ──────────────────────────────────────────────────────────────── */
+/* Estado: THINKING (pulsating spinner) */
+/* ──────────────────────────────────────────────────────────────── */
+
+.streaming-indicator--thinking {
+  background: rgba(59, 130, 246, 0.08);
+  border-color: rgba(59, 130, 246, 0.2);
+}
+
+.streaming-spinner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.streaming-spinner-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--streaming-primary);
+  animation: streaming-pulse 1.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  opacity: 0.6;
+}
+
+.streaming-spinner-dot--1 {
+  animation-delay: 0s;
+}
+
+.streaming-spinner-dot--2 {
+  animation-delay: 0.2s;
+}
+
+.streaming-spinner-dot--3 {
+  animation-delay: 0.4s;
+}
+
+@keyframes streaming-pulse {
+  0%, 100% {
+    opacity: 0.4;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.1);
+  }
+}
+
+.streaming-text {
+  font-weight: 500;
+  color: var(--streaming-text);
+  white-space: nowrap;
+}
+
+.streaming-metric {
+  font-size: 12px;
+  opacity: 0.7;
+  white-space: nowrap;
+}
+
+/* ──────────────────────────────────────────────────────────────── */
+/* Estado: STREAMING (token flow animation) */
+/* ──────────────────────────────────────────────────────────────── */
+
+.streaming-indicator--streaming {
+  background: rgba(147, 51, 234, 0.08);
+  border-color: rgba(147, 51, 234, 0.2);
+}
+
+.streaming-tokens {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.streaming-token {
+  width: 4px;
+  height: 12px;
+  border-radius: 2px;
+  background: var(--streaming-secondary);
+  animation: streaming-token-flow 1.2s ease-in-out infinite;
+  opacity: 0.7;
+}
+
+.streaming-token--1 {
+  animation-delay: 0s;
+}
+
+.streaming-token--2 {
+  animation-delay: 0.15s;
+}
+
+.streaming-token--3 {
+  animation-delay: 0.3s;
+}
+
+@keyframes streaming-token-flow {
+  0% {
+    opacity: 0.3;
+    transform: scaleY(0.6);
+  }
+  50% {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+  100% {
+    opacity: 0.3;
+    transform: scaleY(0.6);
+  }
+}
+
+.streaming-metric--ttft {
+  background: rgba(147, 51, 234, 0.15);
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--streaming-secondary);
+  white-space: nowrap;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* ──────────────────────────────────────────────────────────────── */
+/* Estado: FINALIZING (fade out smooth) */
+/* ──────────────────────────────────────────────────────────────── */
+
+.streaming-indicator--finalizing {
+  background: rgba(16, 185, 129, 0.08);
+  border-color: rgba(16, 185, 129, 0.2);
+  animation: streaming-fade-out 600ms ease-out forwards;
+  animation-delay: 200ms;
+}
+
+@keyframes streaming-fade-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-8px);
+    pointer-events: none;
+  }
+}
+
+/* ──────────────────────────────────────────────────────────────── */
+/* Estado: ERROR (error display + retry) */
+/* ──────────────────────────────────────────────────────────────── */
+
+.streaming-indicator--error {
+  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.2);
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.streaming-error-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+  animation: streaming-shake 400ms cubic-bezier(0.36, 0, 0.66, -0.56);
+}
+
+@keyframes streaming-shake {
+  0%, 100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-4px);
+  }
+  75% {
+    transform: translateX(4px);
+  }
+}
+
+.streaming-error-text {
+  flex: 1;
+  color: rgba(239, 68, 68, 0.9);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.streaming-retry-button {
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  background: rgba(239, 68, 68, 0.1);
+  color: rgba(239, 68, 68, 0.9);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 150ms ease;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.streaming-retry-button:hover {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.5);
+}
+
+.streaming-retry-button:active {
+  transform: scale(0.98);
+}
+
+.streaming-retry-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ──────────────────────────────────────────────────────────────── */
+/* Estado: DONE (completion state) */
+/* ──────────────────────────────────────────────────────────────── */
+
+.streaming-indicator--done {
+  background: rgba(16, 185, 129, 0.08);
+  border-color: rgba(16, 185, 129, 0.2);
+  animation: streaming-done-fade 400ms ease-out forwards;
+  animation-delay: 100ms;
+}
+
+@keyframes streaming-done-fade {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+    pointer-events: none;
+  }
+}
+
+/* ──────────────────────────────────────────────────────────────── */
+/* Responsive: mobile adjustments */
+/* ──────────────────────────────────────────────────────────────── */
+
+@media (max-width: 640px) {
+  .streaming-indicator {
+    padding: 10px 12px;
+    gap: 10px;
+    font-size: 13px;
+  }
+
+  .streaming-spinner-dot {
+    width: 6px;
+    height: 6px;
+  }
+
+  .streaming-token {
+    width: 3px;
+    height: 10px;
+  }
+
+  .streaming-metric--ttft {
+    margin-left: 0;
+    width: 100%;
+    text-align: center;
+  }
+
+  .streaming-indicator--error {
+    flex-direction: column;
+  }
+
+  .streaming-retry-button {
+    width: 100%;
+    text-align: center;
+  }
+
+  .streaming-error-text {
+    width: 100%;
+  }
+}
+
+/* ──────────────────────────────────────────────────────────────── */
+/* Performance: GPU acceleration */
+/* ──────────────────────────────────────────────────────────────── */
+
+.streaming-spinner,
+.streaming-tokens,
+.streaming-spinner-dot,
+.streaming-token {
+  will-change: transform, opacity;
+}

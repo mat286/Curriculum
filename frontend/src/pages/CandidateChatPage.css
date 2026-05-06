@@ -167,6 +167,58 @@
     max-width: 62ch;
 }
 
+.candidate-status-chip {
+    display: inline-flex;
+    align-items: center;
+    margin-top: 10px;
+    padding: 6px 11px;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    border: 1px solid var(--candidate-border);
+    background: rgba(148, 163, 184, 0.12);
+    color: #cbd5e1;
+}
+
+.candidate-status-chip.thinking {
+    background: rgba(148, 163, 184, 0.12);
+    color: #cbd5e1;
+}
+
+.candidate-status-chip.retrieving {
+    background: rgba(56, 189, 248, 0.14);
+    color: #7dd3fc;
+}
+
+.candidate-status-chip.generating {
+    background: rgba(34, 211, 238, 0.14);
+    color: #67e8f9;
+}
+
+.candidate-status-chip.finalizing {
+    background: rgba(16, 185, 129, 0.14);
+    color: #6ee7b7;
+}
+
+.candidate-stream-metrics {
+    margin-top: 10px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.candidate-stream-metric {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 8px;
+    border-radius: 999px;
+    background: rgba(148, 163, 184, 0.1);
+    border: 1px solid var(--candidate-border);
+    color: #cbd5e1;
+    font-size: 0.72rem;
+    font-weight: 600;
+}
+
 .candidate-cv-button {
     border: none;
     border-radius: 12px;
@@ -194,6 +246,44 @@
     background: rgba(239, 68, 68, 0.15);
     border-color: rgba(239, 68, 68, 0.35);
     color: #fca5a5;
+}
+
+.candidate-cancel-button,
+.candidate-retry-button {
+    border-radius: 12px;
+    padding: 10px 14px;
+    font-weight: 700;
+    white-space: nowrap;
+    transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+.candidate-cancel-button {
+    border: 1px solid rgba(239, 68, 68, 0.45);
+    background: rgba(239, 68, 68, 0.12);
+    color: #fca5a5;
+    cursor: pointer;
+}
+
+.candidate-cancel-button:hover {
+    background: rgba(239, 68, 68, 0.22);
+    color: #fecaca;
+}
+
+.candidate-retry-button {
+    border: 1px solid rgba(56, 189, 248, 0.35);
+    background: rgba(56, 189, 248, 0.1);
+    color: #bae6fd;
+    cursor: pointer;
+}
+
+.candidate-retry-button:hover:not(:disabled) {
+    background: rgba(56, 189, 248, 0.2);
+    color: #e0f2fe;
+}
+
+.candidate-retry-button:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
 }
 
 .candidate-chat-topbar-actions {
@@ -335,6 +425,8 @@
     }
 
     .candidate-cv-button,
+    .candidate-cancel-button,
+    .candidate-retry-button,
     .candidate-clear-button {
         width: 100%;
         text-align: center;

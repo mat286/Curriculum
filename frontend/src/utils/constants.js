@@ -3,6 +3,8 @@ export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localho
 export const API_ENDPOINTS = {
   AUTH: {
     GOOGLE: '/api/user/google',
+    REFRESH: '/api/user/refresh',
+    LOGOUT: '/api/user/logout',
   },
   USER: {
     PROFILE: (userId) => `/api/user/${userId}`,
@@ -17,6 +19,7 @@ export const API_ENDPOINTS = {
 export const STORAGE_KEYS = {
   TOKEN: 'token',
   USER: 'user',
+  REFRESH_TOKEN: 'refresh_token',
 };
 
 // Mensajes de error

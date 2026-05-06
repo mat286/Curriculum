@@ -34,9 +34,28 @@ CREATE TABLE IF NOT EXISTS usuarios (
     profile_photo_url VARCHAR(500) DEFAULT NULL,
     onboarding_step TINYINT UNSIGNED NOT NULL DEFAULT 1,
     onboarding_completed TINYINT(1) NOT NULL DEFAULT 0,
+    role ENUM('candidate', 'recruiter') NOT NULL DEFAULT 'candidate',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_email (email)
+    INDEX idx_email (email),
+    INDEX idx_role (role)
+) ENGINE=InnoDB;
+
+-- ============================================
+-- Tabla: refresh_tokens
+-- Rotación y revocación de sesiones JWT
+-- ============================================
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    token_hash VARCHAR(64) NOT NULL UNIQUE,
+    expires_at DATETIME NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    revoked_at TIMESTAMP NULL DEFAULT NULL,
+    device_hint VARCHAR(255) NULL,
+    FOREIGN KEY (user_id) REFERENCES usuarios(id) ON DELETE CASCADE,
+    INDEX idx_token_hash (token_hash),
+    INDEX idx_user_id_active (user_id, revoked_at)
 ) ENGINE=InnoDB;
 
 -- ============================================
@@ -65,7 +84,8 @@ CREATE TABLE IF NOT EXISTS experiencia_laboral (
     actualmente TINYINT(1) DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES usuarios(id) ON DELETE CASCADE,
-    INDEX idx_user_id (user_id)
+    INDEX idx_user_id (user_id),
+    INDEX idx_experiencia_user_created (user_id, created_at)
 ) ENGINE=InnoDB;
 
 -- ============================================
@@ -81,7 +101,8 @@ CREATE TABLE IF NOT EXISTS educacion (
     fecha_fin DATE DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES usuarios(id) ON DELETE CASCADE,
-    INDEX idx_user_id (user_id)
+    INDEX idx_user_id (user_id),
+    INDEX idx_educacion_user_created (user_id, created_at)
 ) ENGINE=InnoDB;
 
 -- ============================================
@@ -98,7 +119,8 @@ CREATE TABLE IF NOT EXISTS cursos (
     certificado_url VARCHAR(500) DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES usuarios(id) ON DELETE CASCADE,
-    INDEX idx_user_id (user_id)
+    INDEX idx_user_id (user_id),
+    INDEX idx_cursos_user_created (user_id, created_at)
 ) ENGINE=InnoDB;
 
 -- ============================================
@@ -115,7 +137,8 @@ CREATE TABLE IF NOT EXISTS proyectos (
     fecha_fin DATE DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES usuarios(id) ON DELETE CASCADE,
-    INDEX idx_user_id (user_id)
+    INDEX idx_user_id (user_id),
+    INDEX idx_proyectos_user_created (user_id, created_at)
 ) ENGINE=InnoDB;
 
 -- ============================================
@@ -144,7 +167,8 @@ CREATE TABLE IF NOT EXISTS idiomas (
     nivel VARCHAR(50) DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES usuarios(id) ON DELETE CASCADE,
-    INDEX idx_user_id (user_id)
+    INDEX idx_user_id (user_id),
+    INDEX idx_idiomas_user_created (user_id, created_at)
 ) ENGINE=InnoDB;
 
 -- ============================================
@@ -158,7 +182,8 @@ CREATE TABLE IF NOT EXISTS habilidades (
     nivel VARCHAR(50) DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES usuarios(id) ON DELETE CASCADE,
-    INDEX idx_user_id (user_id)
+    INDEX idx_user_id (user_id),
+    INDEX idx_habilidades_user_created (user_id, created_at)
 ) ENGINE=InnoDB;
 
 -- ============================================
@@ -171,7 +196,8 @@ CREATE TABLE IF NOT EXISTS respuestas_entrevista (
     respuesta TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES usuarios(id) ON DELETE CASCADE,
-    INDEX idx_user_id (user_id)
+    INDEX idx_user_id (user_id),
+    INDEX idx_respuestas_user_created (user_id, created_at)
 ) ENGINE=InnoDB;
 
 -- ============================================
@@ -204,6 +230,7 @@ CREATE TABLE IF NOT EXISTS candidate_conversation_memory (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE KEY uk_candidate_memory_session (session_key),
     INDEX idx_candidate_memory_candidate (candidate_id),
+    INDEX idx_candidate_memory_candidate_updated (candidate_id, updated_at),
     FOREIGN KEY (candidate_id) REFERENCES usuarios(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
@@ -224,5 +251,82 @@ CREATE TABLE IF NOT EXISTS candidate_faqs (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_candidate_faq_candidate_active (candidate_id, is_active),
     INDEX idx_candidate_faq_candidate_priority (candidate_id, priority),
+    INDEX idx_candidate_faq_active_priority_updated (candidate_id, is_active, priority, updated_at),
+    INDEX idx_candidate_faq_priority_updated (candidate_id, priority, updated_at),
+    FOREIGN KEY (candidate_id) REFERENCES usuarios(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- ============================================
+-- Tabla: embedding_documents
+-- Metadata durable por chunk indexado en Chroma
+-- ============================================
+CREATE TABLE IF NOT EXISTS embedding_documents (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    candidate_id INT NOT NULL,
+    doc_key VARCHAR(191) NOT NULL,
+    section_type VARCHAR(80) NOT NULL,
+    source_table VARCHAR(80) NOT NULL,
+    source_row_id INT DEFAULT NULL,
+    content_hash CHAR(64) NOT NULL,
+    content_preview VARCHAR(512) DEFAULT NULL,
+    token_estimate INT UNSIGNED NOT NULL DEFAULT 0,
+    embedding_model VARCHAR(120) NOT NULL,
+    embedding_provider VARCHAR(60) NOT NULL,
+    collection_name VARCHAR(120) NOT NULL,
+    chroma_doc_id VARCHAR(191) NOT NULL,
+    indexed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    is_active TINYINT(1) NOT NULL DEFAULT 1,
+    UNIQUE KEY uk_embedding_doc_candidate_key_hash (candidate_id, doc_key, content_hash),
+    UNIQUE KEY uk_embedding_doc_candidate_chroma (candidate_id, chroma_doc_id),
+    INDEX idx_embedding_doc_candidate_active (candidate_id, is_active),
+    INDEX idx_embedding_doc_candidate_section_active (candidate_id, section_type, is_active, updated_at),
+    INDEX idx_embedding_doc_candidate_hash_active (candidate_id, content_hash, is_active),
+    INDEX idx_embedding_doc_candidate_source (candidate_id, source_table, source_row_id),
+    INDEX idx_embedding_doc_candidate_updated (candidate_id, updated_at),
+    FOREIGN KEY (candidate_id) REFERENCES usuarios(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- ============================================
+-- Tabla: embedding_index_jobs
+-- Cola durable para reindexaciones/invalidez
+-- ============================================
+CREATE TABLE IF NOT EXISTS embedding_index_jobs (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    candidate_id INT NOT NULL,
+    reason VARCHAR(80) NOT NULL,
+    status ENUM('pending', 'running', 'done', 'error') NOT NULL DEFAULT 'pending',
+    attempts TINYINT UNSIGNED NOT NULL DEFAULT 0,
+    payload_json JSON DEFAULT NULL,
+    error_message TEXT DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    started_at TIMESTAMP NULL DEFAULT NULL,
+    finished_at TIMESTAMP NULL DEFAULT NULL,
+    INDEX idx_embedding_jobs_status_created (status, created_at),
+    INDEX idx_embedding_jobs_candidate (candidate_id),
+    INDEX idx_embedding_jobs_candidate_status_created (candidate_id, status, created_at),
+    FOREIGN KEY (candidate_id) REFERENCES usuarios(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- ============================================
+-- Tabla: embedding_query_telemetry
+-- Telemetría de consultas vectoriales/híbridas para p50/p95
+-- ============================================
+CREATE TABLE IF NOT EXISTS embedding_query_telemetry (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    request_id VARCHAR(80) NOT NULL,
+    candidate_id INT NOT NULL,
+    query_hash CHAR(64) NOT NULL,
+    top_k SMALLINT UNSIGNED NOT NULL,
+    method VARCHAR(40) NOT NULL,
+    duration_ms INT UNSIGNED NOT NULL,
+    hit_count INT UNSIGNED NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_embedding_telemetry_created (created_at),
+    INDEX idx_embedding_telemetry_method_created (method, created_at),
+    INDEX idx_embedding_telemetry_created_method (created_at, method),
+    INDEX idx_embedding_telemetry_candidate_created (candidate_id, created_at),
+    INDEX idx_embedding_telemetry_duration_created (duration_ms, created_at),
+    INDEX idx_embedding_telemetry_hash_created (query_hash, created_at),
     FOREIGN KEY (candidate_id) REFERENCES usuarios(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;

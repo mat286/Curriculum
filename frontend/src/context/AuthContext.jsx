@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { authService } from '../services/api';
+import { authService, userService } from '../services/api';
 import { STORAGE_KEYS } from '../utils/constants';
 
 const AuthContext = createContext(null);
@@ -40,10 +40,20 @@ export const AuthProvider = ({ children }) => {
       } catch (error) {
         localStorage.removeItem(STORAGE_KEYS.TOKEN);
         localStorage.removeItem(STORAGE_KEYS.USER);
+        localStorage.removeItem(STORAGE_KEYS.REFRESH_TOKEN);
         setOnboardingCompleted(false);
       }
     }
     setLoading(false);
+
+    // Escuchar el evento dispatched por api.js cuando el token expira y el refresh falla
+    const handleForceLogout = () => {
+      setToken(null);
+      setUser(null);
+      setOnboardingCompleted(false);
+    };
+    window.addEventListener('auth:logout', handleForceLogout);
+    return () => window.removeEventListener('auth:logout', handleForceLogout);
   }, []);
 
   const login = async (credential) => {
@@ -57,6 +67,10 @@ export const AuthProvider = ({ children }) => {
       if (response.success && response.token && response.user) {
         localStorage.setItem(STORAGE_KEYS.TOKEN, response.token);
         localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(response.user));
+        // Guardar refresh token si el backend lo devuelve (P1-003)
+        if (response.refreshToken) {
+          localStorage.setItem(STORAGE_KEYS.REFRESH_TOKEN, response.refreshToken);
+        }
         setToken(response.token);
         setUser(response.user);
         setOnboardingCompleted(parseBoolean(response.user?.onboarding_completed ?? response.user?.onboardingCompleted));
@@ -77,9 +91,19 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const logout = () => {
+  const logout = async () => {
+    // Notificar al backend para revocar refresh tokens (best-effort)
+    try {
+      const token = localStorage.getItem(STORAGE_KEYS.TOKEN);
+      if (token) {
+        await authService.logout(token);
+      }
+    } catch {
+      // Error no crítico — limpiar estado de todas formas
+    }
     localStorage.removeItem(STORAGE_KEYS.TOKEN);
     localStorage.removeItem(STORAGE_KEYS.USER);
+    localStorage.removeItem(STORAGE_KEYS.REFRESH_TOKEN);
     setToken(null);
     setUser(null);
     setOnboardingCompleted(false);
@@ -89,6 +113,34 @@ export const AuthProvider = ({ children }) => {
     setUser(userData);
     localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(userData));
     setOnboardingCompleted(parseBoolean(userData?.onboarding_completed ?? userData?.onboardingCompleted));
+  };
+
+  const updateRole = async (newRole) => {
+    if (!user?.id) return { success: false, error: 'Usuario no autenticado' };
+    try {
+      await userService.updateRole(user.id, newRole);
+      // Renovar JWT para que incluya el nuevo role
+      const storedRefresh = localStorage.getItem(STORAGE_KEYS.REFRESH_TOKEN);
+      if (storedRefresh) {
+        try {
+          const refreshResponse = await authService.refresh(storedRefresh);
+          if (refreshResponse?.token) {
+            localStorage.setItem(STORAGE_KEYS.TOKEN, refreshResponse.token);
+            if (refreshResponse.refreshToken) {
+              localStorage.setItem(STORAGE_KEYS.REFRESH_TOKEN, refreshResponse.refreshToken);
+            }
+          }
+        } catch {
+          // No crítico: el role local se actualiza igual
+        }
+      }
+      const updatedUser = { ...user, role: newRole };
+      setUser(updatedUser);
+      localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(updatedUser));
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message || 'Error al actualizar el rol' };
+    }
   };
 
   const markOnboardingCompleted = (value = true, userData) => {
@@ -114,9 +166,12 @@ export const AuthProvider = ({ children }) => {
     loading,
     onboardingCompleted,
     isAuthenticated: !!user && !!token,
+    role: user?.role || 'candidate',
+    isRecruiter: user?.role === 'recruiter',
     login,
     logout,
     updateUser,
+    updateRole,
     markOnboardingCompleted,
   };
 

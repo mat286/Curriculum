@@ -1,6 +1,26 @@
 import React from "react";
 import ProfileSection from "./ProfileSection";
 
+const getItemQuality = (item) => {
+  const checks = [
+    Boolean(item.titulo?.trim()),
+    Boolean(item.descripcion?.trim()),
+    Boolean(item.organizacion?.trim() || item.nivel?.trim() || item.categoria?.trim()),
+  ];
+
+  const completed = checks.filter(Boolean).length;
+
+  if (completed === checks.length) {
+    return { label: "Listo para IA", tone: "ok" };
+  }
+
+  if (completed === 0) {
+    return { label: "Sin datos", tone: "empty" };
+  }
+
+  return { label: "Faltan datos", tone: "warn" };
+};
+
 export default function ProfileListSection({
   section,
   items,
@@ -20,21 +40,35 @@ export default function ProfileListSection({
       badge={items.length}
     >
       {items.length === 0 && (
-        <div className="empty-state">Aún no agregaste información en esta sección.</div>
+        <div className="empty-state">
+          <strong>{section.title}</strong>
+          <p>
+            Esta seccion todavia no tiene contenido. Agrega al menos un {section.singular} con contexto
+            concreto para mejorar la precision de la IA.
+          </p>
+        </div>
       )}
 
       {items.map((item, index) => (
         <div key={item.id} className="sub-item">
           <div className="sub-item-topbar">
-            <span className="sub-item-index">{section.singular} {index + 1}</span>
-            <button
-              type="button"
-              className="remove-btn"
-              onClick={() => onRemove(section.field, item.id)}
-              title="Eliminar"
-            >
-              ×
-            </button>
+            <div className="sub-item-topbar-left">
+              <span className="sub-item-index">{section.singular} {index + 1}</span>
+              <span className={`item-quality item-quality--${getItemQuality(item).tone}`}>
+                {getItemQuality(item).label}
+              </span>
+            </div>
+
+            <div className="sub-item-actions">
+              <button
+                type="button"
+                className="item-action-btn item-action-btn--danger"
+                onClick={() => onRemove(section.field, item.id)}
+                title="Eliminar"
+              >
+                Eliminar
+              </button>
+            </div>
           </div>
 
           <div className="field-group sub-item-title-field">

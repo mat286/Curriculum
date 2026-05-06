@@ -1,7 +1,35 @@
 import { getOrCreateCollection, getOrCreateGlobalCollection } from '../config/chroma.js';
-import { getEmbedding } from './ollamaService.js';
+import crypto from 'crypto';
+import { getEmbedding, getEmbeddings } from './ollamaService.js';
 import { getFullProfile } from './dataService.js';
+import { embeddingMetadataRepository } from './EmbeddingMetadataRepository.js';
 import logger from '../utils/logger.js';
+import { HybridSearchService } from './HybridSearchService.js';
+
+const hybridSearchService = new HybridSearchService();
+
+function buildContentHash(content) {
+    return crypto.createHash('sha256').update(String(content || '')).digest('hex');
+}
+
+function resolveSearchArgs(topKOrOptions, maybeOptions) {
+    let topK = 3;
+    let options = {};
+
+    if (typeof topKOrOptions === 'number') {
+        topK = topKOrOptions;
+        options = maybeOptions && typeof maybeOptions === 'object' ? maybeOptions : {};
+    } else if (topKOrOptions && typeof topKOrOptions === 'object') {
+        options = topKOrOptions;
+        topK = Number.parseInt(options.topKHint ?? options.topK ?? 3, 10);
+    }
+
+    if (!Number.isFinite(topK) || topK <= 0) {
+        topK = 3;
+    }
+
+    return { topK, options };
+}
 
 /**
  * Convierte los datos del perfil en documentos para indexar.
@@ -125,35 +153,43 @@ export async function indexUserData(userId) {
             return false;
         }
 
+        const docsWithHash = docs.map((doc) => ({
+            ...doc,
+            contentHash: buildContentHash(doc.text),
+            charCount: String(doc.text || '').length,
+        }));
+
         // Eliminar colección individual anterior y recrear
         await deleteUserIndex(userId);
         const collection = await getOrCreateCollection(userId);
 
-        // Generar embeddings en paralelo con concurrencia limitada (lotes de 3)
-        const BATCH = 3;
+        // Generar embeddings por lotes usando /api/embed para reducir overhead de red.
+        const BATCH = Number.parseInt(process.env.EMBEDDING_INDEX_BATCH_SIZE || '12', 10);
+        const batchSize = Number.isFinite(BATCH) && BATCH > 0 ? BATCH : 12;
         const embeddings = [];
-        for (let i = 0; i < docs.length; i += BATCH) {
-            const batch = docs.slice(i, i + BATCH);
-            const batchEmbeddings = await Promise.all(batch.map(doc => getEmbedding(doc.text)));
+        for (let i = 0; i < docs.length; i += batchSize) {
+            const batch = docsWithHash.slice(i, i + batchSize);
+            const batchTexts = batch.map((doc) => doc.text);
+            const batchEmbeddings = await getEmbeddings(batchTexts);
             embeddings.push(...batchEmbeddings);
         }
 
         await collection.add({
-            ids: docs.map(d => d.id),
-            documents: docs.map(d => d.text),
-            metadatas: docs.map(d => d.metadata),
+            ids: docsWithHash.map(d => d.id),
+            documents: docsWithHash.map(d => d.text),
+            metadatas: docsWithHash.map(d => d.metadata),
             embeddings,
         });
 
         // Actualizar colección global: upsert con IDs con prefijo de usuario
         try {
             const globalCollection = await getOrCreateGlobalCollection();
-            const globalIds = docs.map(d => `u${userId}_${d.id}`);
-            const globalMetadatas = docs.map(d => ({ ...d.metadata, user_id: userId }));
+            const globalIds = docsWithHash.map(d => `u${userId}_${d.id}`);
+            const globalMetadatas = docsWithHash.map(d => ({ ...d.metadata, user_id: userId }));
 
             await globalCollection.upsert({
                 ids: globalIds,
-                documents: docs.map(d => d.text),
+                documents: docsWithHash.map(d => d.text),
                 metadatas: globalMetadatas,
                 embeddings,
             });
@@ -161,7 +197,29 @@ export async function indexUserData(userId) {
             logger.warn({ err: globalErr, userId }, 'No se pudo actualizar colección global, continuando');
         }
 
-        logger.info({ userId, docCount: docs.length }, 'Datos indexados en ChromaDB');
+        try {
+            await embeddingMetadataRepository.markCandidateDocsInactive(userId);
+            const docsMetadata = docsWithHash.map((doc) => ({
+                docId: doc.id,
+                docType: doc.metadata?.type,
+                embeddingDomain: doc.metadata?.embedding_domain,
+                contentHash: doc.contentHash,
+                charCount: doc.charCount,
+                tokenEstimate: Math.ceil(doc.charCount / 4),
+                sourceTable: 'profile_compiled',
+                sourceRowId: null,
+                contentPreview: String(doc.text || '').slice(0, 512),
+                embeddingModel: process.env.EMBEDDING_MODEL || 'nomic-embed-text',
+                embeddingProvider: process.env.AI_PROVIDER || 'ollama',
+                collectionName: `user_${userId}_cv`,
+                chromaDocId: doc.id,
+            }));
+            await embeddingMetadataRepository.upsertDocumentsMetadata(userId, docsMetadata);
+        } catch (metadataErr) {
+            logger.warn({ err: metadataErr, userId }, 'No se pudo persistir metadata de embeddings, continuando');
+        }
+
+        logger.info({ userId, docCount: docsWithHash.length }, 'Datos indexados en ChromaDB');
         return true;
     } catch (error) {
         logger.error({ err: error, userId }, 'Error indexando datos en ChromaDB');
@@ -172,7 +230,13 @@ export async function indexUserData(userId) {
 /**
  * Busca documentos semánticamente similares al query.
  */
-export async function search(query, userId, topK = 3) {
+export async function search(query, userId, topKOrOptions = 3, maybeOptions = {}) {
+    const started = Date.now();
+    const { topK, options } = resolveSearchArgs(topKOrOptions, maybeOptions);
+    const requestId = options?.requestId || null;
+    const method = options?.method || 'semantic';
+    const profileContext = options?.profileContext || null;
+
     try {
         const collection = await getOrCreateCollection(userId);
         const queryEmbedding = await getEmbedding(query);
@@ -182,9 +246,60 @@ export async function search(query, userId, topK = 3) {
             nResults: topK,
         });
 
-        return results.documents?.[0] || [];
+        const hits = results.documents?.[0] || [];
+
+        // Si hay profileContext disponible, enriquecer con búsqueda híbrida BM25+semantic
+        let finalHits = hits;
+        let finalMethod = method;
+
+        if (profileContext && hits.length > 0) {
+            try {
+                const hybridResult = hybridSearchService.search({
+                    query,
+                    profileContext,
+                    semanticResults: hits,
+                    candidateId: userId,
+                    requestId,
+                });
+                finalHits = hybridResult.results;
+                finalMethod = hybridResult.method;
+            } catch (hybridErr) {
+                logger.warn({ err: hybridErr, userId }, 'Hybrid search falló, usando solo resultados semánticos');
+            }
+        }
+
+        try {
+            await embeddingMetadataRepository.recordQueryTelemetry({
+                requestId,
+                candidateId: userId,
+                method: finalMethod,
+                query,
+                topK,
+                hits: finalHits.length,
+                durationMs: Date.now() - started,
+            });
+        } catch (telemetryErr) {
+            logger.warn({ err: telemetryErr, userId, requestId }, 'No se pudo registrar telemetry de búsqueda semántica');
+        }
+
+        return finalHits;
     } catch (error) {
         logger.warn({ err: error, userId }, 'Error en búsqueda semántica, continuando sin embeddings');
+
+        try {
+            await embeddingMetadataRepository.recordQueryTelemetry({
+                requestId,
+                candidateId: userId,
+                method: finalMethod ?? method,
+                query,
+                topK,
+                hits: 0,
+                durationMs: Date.now() - started,
+            });
+        } catch {
+            // Telemetry no crítica
+        }
+
         return [];
     }
 }

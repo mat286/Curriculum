@@ -1,76 +1,70 @@
 # Project Snapshot — CV Conversacional IA
-> Actualizado: 4 Mayo 2026
+> Actualizado: Sprint 2 P2-003 completado — Mayo 2026
 
 ## Estado Actual
-**FASE: Sprint 3 — DevOps + Observabilidad**
+**FASE: P0 ✅ + P1 completo ✅ + Sprint 1 ✅ + Sprint 2 ✅ — Sprint 3 siguiente**
 
-El proyecto es un sistema de **CV conversacional con IA** que permite a candidatos exponer su perfil profesional como un avatar interactivo, y a reclutadores buscar candidatos por perfil semántico.
+## Stack vigente
+- Frontend: React 19 + Vite + Router 7 + CSS custom properties
+- Backend: Node.js ESM + Express 4 + mysql2 (modular)
+- IA: Gemini (primario) → Ollama (fallback + embeddings)
+- Retrieval: ChromaDB + BM25 hybrid + ReRanking
+- Auth: JWT access 15m + refresh 7d con rotación + RBAC por role
+- Transporte: SSE v2 streaming
 
-✅ **Sprint 1-2 Completados**: Frontend gaps, FAQs UI, Rate limiting, Tests 60+ casos, OWASP fixes
-**FASE: Sprint 3 — Observabilidad + UX (99% completado)**
+## Completado en Sprint 2 (P2-003 Multi-rol)
+- ✅ DB: campo `role ENUM('candidate','recruiter')` en tabla `usuarios` + índice
+- ✅ JWT: claim `role` incluido en access token
+- ✅ Middleware: `requireRole(...roles)` composable — 403 si rol no autorizado
+- ✅ `/api/recruiter/chat` protegida solo para recruiters
+- ✅ `PATCH /api/user/:id/role` para self-service de upgrade
+- ✅ AuthContext: expone `role`, `isRecruiter`, `updateRole()`
+- ✅ RoleRoute: componente AccesoRestringido con upgrade 1-click para candidatos
+- ✅ Navbar: link "Buscar candidatos" condicionado a `isRecruiter` + badge de rol
+- ✅ RecruiterPage: maneja 403 gracefully
 
-✅ **Sprint 3 Completado**: CI/CD GitHub Actions + Dashboard Telemetría en tiempo real
-⏳ **Sprint 3 Final**: Onboarding wizard para candidatos nuevos (TASK-012)
-## Stack
-- **Frontend**: React 19 + Vite + React Router 7 + Tailwind CSS 4 + Google OAuth
-- **Backend**: Node.js (ESM) + Express 4 + Helmet + Rate Limiter
-- **DB**: MySQL 8 (pool de conexiones via mysql2)
-- **IA**: Gemini (primario) + Ollama (fallback + embeddings siempre)
-- **Vector DB**: ChromaDB (RAG semántico)
-- **Auth**: JWT + Google OAuth (google-auth-library)
-- **Logs**: Pino
+## Completado en Sprint 1
+- ✅ P2-001: ttfbMs/totalMs/ttftMs instrumentados en chatController.askStream
+- ✅ P2-001: TTFT E2E separado de TTFB en MetricsAggregatorService
+- ✅ S-002: GET /api/metrics protegido con autenticarUsuario
 
-## Arquitectura Actual
+## Próximo objetivo (Sprint 3)
+- P2-004: Onboarding wizard guiado — wizard de carga de CV en pasos
+- S-003: Content-Security-Policy header personalizado (Helmet)
+- S-004: Rate limiting por userId para usuarios autenticados
 
-```
-Frontend (React)
-  └─ /login          → Google OAuth
-  └─ /perfil         → Edición de CV (ProtectedRoute)
-  └─ /:id            → Avatar chat público (candidato)
-  └─ /search         → Búsqueda recruiter (ProtectedRoute)
+## Estado Actual
+**FASE: P0 ✅ + P1 (P1-002/003/004/005/006 ✅) — P1-001 Observabilidad E2E parcial + P2 Limpieza completada**
 
-Backend (Express)
-  └─ POST /api/user/google       → Auth
-  └─ GET/PUT /api/user/:id       → Perfil
-  └─ POST /api/chat/ask          → Chat básico
-  └─ POST /api/chat/candidate/:id       → Chat candidato (JSON)
-  └─ POST /api/chat/candidate/:id/stream → Chat candidato (SSE)
-  └─ POST /api/recruiter/chat    → Búsqueda recruiter
-  └─ GET /api/metrics            → Métricas agregadas (telemetría)
-  └─ GET /api/metrics/health     → Health check telemetría
-  └─ GET /api/metrics/raw        → Registros sin procesar (admin)
-  └─ POST /api/metrics/reset     → Reset de métricas (admin)
-  └─ GET /health                 → Health checks servicios
+## Stack vigente
+- Frontend: React 19 + Vite + Router 7 (CSS custom properties — TailwindCSS removido)
+- Backend: Node.js ESM + Express 4 + mysql2 (modular: modules/, services/, ai/)
+- IA: Gemini (primario) → Ollama (fallback automático + embeddings nomic-embed-text)
+- Retrieval: ChromaDB + BM25 hybrid + ReRanking (upgraded desde fixed top-k=2)
+- Auth: JWT access 15m + refresh 7d con rotación
+- Transporte: SSE v2 streaming con heartbeat + correlación + métricas
 
-Módulos avanzados (server/backend/modules/):
-  ChatOrchestrator → CandidateAggregateService → MultiLevelCacheService
-  → PromptAssembler → ResilientLLMProvider → ChatTelemetry
-  → ConversationMemoryService → FAQSemanticRetriever
-```
+## Limpieza técnica aplicada (Mayo 2026)
+- ✅ Código muerto eliminado: routerService.js + router.prompt.js (nunca usados en producción)
+- ✅ Funciones legacy Ollama eliminadas: generateResponse/generateResponseStream en responseService.js
+- ✅ response.prompt.js eliminado (dependía de las funciones legacy)
+- ✅ LocalLLMProvider.js + OpenAIProvider.js eliminados (stubs vacíos)
+- ✅ isRetryableError centralizado en utils/retryUtils.js (era triplicada)
+- ✅ Imports no usados removidos en chatController.js
+- ✅ toText/toBoolean/normalizeItems deduplicados → frontend/src/utils/profileNormalizers.js
+- ✅ pino-pretty movido a devDependencies en backend
+- ✅ tailwindcss + postcss + autoprefixer eliminados de frontend (no estaban configurados)
+- ✅ 14 .md obsoletos identificados para eliminar
+- ✅ project_context.md actualizado: stack correcto (TailwindCSS eliminado, JWT hardening)
 
-## Fase del Roadmap
-- ✅ Auth con Google
-- ✅ Perfil editable (CV estructurado)
-- ✅ Chat con avatar (SSE streaming)
-- ✅ Router inteligente de intents
-- ✅ RAG semántico (ChromaDB + embeddings)
-- ✅ Caché multinivel (L1/L2/L3)
-- ✅ Recruiter chat + búsqueda semántica
-- ✅ Arquitectura modular (orquestador, snapshot, memory)
-- ✅ Dashboard telemetría (MetricsAggregatorService + endpoints REST)
-- ⚠️ FAQs por candidato (módulo creado, integración parcial)
-- ⚠️ Tests (ausentes)
-- ⚠️ CI/CD (no configurado)
-- ❌ Panel de analytics visual (frontend dashboard)
-- ❌ Notificaciones (reclutador → candidato)
-- ❌ Sistema de favoritos / guardado de búsquedas recruiter
-- ❌ Panel admin
+## Bloqueos activos
+- Pendiente cierre de observabilidad E2E (P1-001): 2 gaps HIGH
+  - chatController.askStream no propaga ttfbMs/totalMs en sendMetrics
+  - TTFT E2E y TTFB son alias del mismo dato en MetricsAggregatorService
 
-## Bloqueos Activos
-- Sin archivo `.env.example` en frontend
-- Sin tests unitarios ni de integración
-- Sin CI/CD pipeline
-- ChromaDB necesita Ollama siempre corriendo para embeddings (incluso cuando AI_PROVIDER=gemini)
-
-## Próximo Objetivo
-Completar FAQs por candidato + suite de tests básica + hardening seguridad/producción
+## Próximo objetivo (P2)
+Cerrar P1-001 + arrancar P2:
+1. Instrumentar chatController.js askStream con ttfbMs/totalMs reales
+2. Separar TTFT E2E de TTFB en MetricsAggregatorService.getChatMetricsSnapshot()
+3. Ejecutar limpieza física de archivos obsoletos (ver active_tasks)
+4. Refactor system instruction (docs/REFACTOR_SYSTEM_INSTRUCTION_DESIGN.md)

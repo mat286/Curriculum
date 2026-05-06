@@ -14,6 +14,7 @@ import candidatesRoutes from './routes/candidates.js';
 import candidateChatRoutes from './routes/candidateChat.js';
 import recruiterRoutes from './routes/recruiter.js';
 import metricsRoutes from './routes/metrics.js';
+import internalChatMetricsRoutes from './routes/internalChatMetrics.js';
 import { warmupModel } from './services/ollamaService.js';
 import { OLLAMA_MODEL, OLLAMA_ROUTER_MODEL } from './config/ollama.js';
 
@@ -22,6 +23,12 @@ validateEnv();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Configurar trust proxy para leer IP real cuando hay proxies (nginx, load balancer)
+// Necesario para que rate limiters usen req.ip correcto
+if (process.env.NODE_ENV === 'production') {
+    app.set('trust proxy', 1);
+}
 
 // Middlewares globales
 app.use(helmet());
@@ -60,6 +67,7 @@ app.use('/api/chat', candidateChatRoutes);
 app.use('/api/candidates', candidatesRoutes);
 app.use('/api/recruiter', recruiterRoutes);
 app.use('/api/metrics', metricsRoutes);
+app.use('/internal', internalChatMetricsRoutes);
 
 // Health check — verifica MySQL y Ollama
 app.get('/health', async (req, res) => {
@@ -105,9 +113,13 @@ async function startServer() {
 
         app.listen(PORT, () => {
             logger.info({ port: PORT, env: process.env.NODE_ENV || 'development' }, 'Servidor iniciado');
-            warmupModel(OLLAMA_MODEL);
+            Promise.resolve().then(() => warmupModel(OLLAMA_MODEL)).catch((error) => {
+                logger.warn({ err: error, model: OLLAMA_MODEL }, 'Warmup principal de Ollama falló');
+            });
             if (OLLAMA_ROUTER_MODEL !== OLLAMA_MODEL) {
-                warmupModel(OLLAMA_ROUTER_MODEL);
+                Promise.resolve().then(() => warmupModel(OLLAMA_ROUTER_MODEL)).catch((error) => {
+                    logger.warn({ err: error, model: OLLAMA_ROUTER_MODEL }, 'Warmup de modelo router falló');
+                });
             }
         });
     } catch (error) {

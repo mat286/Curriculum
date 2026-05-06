@@ -1,10 +1,38 @@
-import { classify } from '../services/routerService.js';
 import { getUserData } from '../services/dataService.js';
-import { generateResponse, generateResponseStream } from '../services/responseService.js';
+import { generateResponseFromPrompt, generateResponseStreamFromPrompt } from '../services/responseService.js';
 import { search as semanticSearch } from '../services/embeddingService.js';
+import { PromptAssembler } from '../modules/prompt/PromptAssembler.js';
 import { ValidationError, NotFoundError } from '../middlewares/errorHandler.js';
 import logger from '../utils/logger.js';
 import { withTimeout, createCache } from '../utils/chatHelpers.js';
+import { initSSE } from '../modules/chat/StreamResponse.js';
+import { HybridSearchService } from '../services/HybridSearchService.js';
+import { isRetryableError } from '../utils/retryUtils.js';
+import metricsAggregator from '../config/metricsAggregator.js';
+
+const hybridSearch = new HybridSearchService();
+const promptAssembler = new PromptAssembler();
+
+export function enrichWithHybrid(query, semanticHits, userData, candidateId, requestId) {
+    if (!userData || semanticHits.length === 0) return semanticHits;
+    try {
+        const result = hybridSearch.search({
+            query,
+            profileContext: userData,
+            semanticResults: semanticHits,
+            candidateId,
+            requestId,
+        });
+        logger.info(
+            { candidateId, requestId, method: result.method, beforeCount: semanticHits.length, afterCount: result.results.length },
+            'retrieval:hybrid applied'
+        );
+        return result.results;
+    } catch (err) {
+        logger.warn({ err, candidateId }, 'Hybrid enrichment falló, usando solo resultados semánticos');
+        return semanticHits;
+    }
+}
 
 const QUICK_RESPONSES = [
     {
@@ -30,7 +58,7 @@ function getFastDirectResponse(question, userName) {
 
 /**
  * POST /api/chat/ask
- * Endpoint principal del chat con routing inteligente.
+ * Endpoint principal del chat con enfoque retrieval-first.
  */
 export async function ask(req, res, next) {
     try {
@@ -41,6 +69,9 @@ export async function ask(req, res, next) {
         }
 
         const trimmedQuestion = question.trim();
+        if (trimmedQuestion.length > 2000) {
+            throw new ValidationError('La pregunta no puede superar los 2000 caracteres');
+        }
         const userId = req.user.id;
         const userName = `${req.user.nombre || ''} ${req.user.apellido || ''}`.trim() || 'Candidato';
 
@@ -55,19 +86,8 @@ export async function ask(req, res, next) {
             return res.json({ ...cachedPayload, cached: true });
         }
 
-        // Paso 1: Router LLM — clasificar intención
-        const decision = await classify(trimmedQuestion, userName);
-
-        logger.info({ userId, intent: decision.intent, needs_db: decision.needs_db }, 'Chat: decisión del router');
-
-        // Caso A: Respuesta directa (saludo, charla casual)
-        if (!decision.needs_db && decision.direct_response) {
-            return res.json({ answer: decision.direct_response, userId, routed: 'direct' });
-        }
-
-        // Caso B: Necesita datos de la base de datos
         const [userDataResult, embeddingResult] = await Promise.allSettled([
-            getUserData(userId, decision.fields_required || []),
+            getUserData(userId, []),
             withTimeout(semanticSearch(trimmedQuestion, userId, 2), 900, []),
         ]);
 
@@ -80,19 +100,34 @@ export async function ask(req, res, next) {
             throw new NotFoundError('Usuario no encontrado');
         }
 
-        const embeddingResults = embeddingResult.status === 'fulfilled' ? embeddingResult.value : [];
+        const semanticHits = embeddingResult.status === 'fulfilled' ? embeddingResult.value : [];
         if (embeddingResult.status === 'rejected') {
             logger.debug({ userId }, 'Embeddings no disponibles, continuando sin ellos');
         }
 
-        // Paso 3: Segunda llamada a LLM con datos del CV
-        const answer = await generateResponse(userName, trimmedQuestion, userData, embeddingResults);
+        const embeddingResults = enrichWithHybrid(trimmedQuestion, semanticHits, userData, userId, null);
+        const promptBuildResult = promptAssembler.build({
+            candidateName: userName,
+            profileContext: userData,
+            semanticContext: embeddingResults,
+            conversationMemory: null,
+            faqHit: null,
+            selectedSections: [],
+            question: trimmedQuestion,
+            requestId: null,
+        });
+        const systemInstruction = promptBuildResult?.systemInstruction ?? null;
+        const userPrompt = String(promptBuildResult?.userPrompt ?? promptBuildResult?.prompt ?? '').trim() || trimmedQuestion;
+        const compressionStats = promptBuildResult?.compressionStats ?? null;
+
+        logger.debug({ userId, promptChars: userPrompt.length, compressionStats }, 'chat:prompt built');
+        const answer = await generateResponseFromPrompt(userPrompt, systemInstruction);
 
         const payload = {
             answer,
             userId,
             routed: 'with_data',
-            intent: decision.intent,
+            intent: 'retrieval_direct',
         };
 
         answerCache.set(cacheKey, payload);
@@ -120,81 +155,118 @@ export async function askStream(req, res, next) {
     }
 
     const trimmedQuestion = question.trim();
+    if (trimmedQuestion.length > 2000) {
+        return next(new ValidationError('La pregunta no puede superar los 2000 caracteres'));
+    }
+
+    const startMs = Date.now();
+    let firstTokenMs = null;
+
     const userId = req.user.id;
     const userName = `${req.user.nombre || ''} ${req.user.apellido || ''}`.trim() || 'Candidato';
+    const sse = initSSE(res);
 
-    // SSE headers
-    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-    res.setHeader('Cache-Control', 'no-cache, no-transform');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no');
-    res.flushHeaders();
-
-    // Desactiva el algoritmo de Nagle para que cada res.write() se envíe
-    // inmediatamente sin esperar a que se llene el buffer TCP.
-    res.socket?.setNoDelay(true);
-
-    const send = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
-    const finish = (meta = {}) => { send({ done: true, ...meta }); res.end(); };
-
-    // Detectar si el cliente se desconectó
     let clientGone = false;
-    req.on('close', () => { clientGone = true; });
+    req.on('close', () => {
+        clientGone = true;
+        sse.stopHeartbeat();
+    });
 
     try {
-        // Fast path
+        sse.sendAck({ phase: 'accepted' });
+        sse.startHeartbeat();
+        sse.sendStatus('thinking');
+
         const fastResponse = getFastDirectResponse(trimmedQuestion, userName);
         if (fastResponse) {
-            send({ token: fastResponse });
-            finish({ routed: 'fast-direct' });
+            sse.sendStatus('generating', { source: 'fast-direct' });
+            sse.sendToken(fastResponse);
+            sse.sendStatus('finalizing');
+            sse.finish({ routed: 'fast-direct' });
             return;
         }
 
-        // Clasificación de intención
-        const decision = await classify(trimmedQuestion, userName);
-        logger.info({ userId, intent: decision.intent, needs_db: decision.needs_db }, 'Stream: decisión del router');
+        sse.sendStatus('retrieving');
 
-        if (!decision.needs_db && decision.direct_response) {
-            send({ token: decision.direct_response });
-            finish({ routed: 'direct' });
-            return;
-        }
-
-        // Obtener datos
         const [userDataResult, embeddingResult] = await Promise.allSettled([
-            getUserData(userId, decision.fields_required || []),
+            getUserData(userId, []),
             withTimeout(semanticSearch(trimmedQuestion, userId, 2), 900, []),
         ]);
 
         if (userDataResult.status === 'rejected') {
-            send({ error: userDataResult.reason?.message || 'Error al obtener datos del usuario' });
+            sse.sendError(userDataResult.reason || 'Error al obtener datos del usuario', isRetryableError(userDataResult.reason));
             res.end();
             return;
         }
 
         const userData = userDataResult.value;
         if (!userData) {
-            send({ error: 'Usuario no encontrado' });
+            sse.sendError('Usuario no encontrado', false);
             res.end();
             return;
         }
 
-        const embeddingResults = embeddingResult.status === 'fulfilled' ? embeddingResult.value : [];
+        const semanticHits = embeddingResult.status === 'fulfilled' ? embeddingResult.value : [];
+        if (embeddingResult.status === 'rejected') {
+            logger.debug({ userId, requestId: sse.requestId }, 'Embeddings no disponibles en stream, continuando sin ellos');
+        }
 
-        // Streaming de la respuesta
-        await generateResponseStream(
-            userName,
-            trimmedQuestion,
-            userData,
-            embeddingResults,
-            (token) => { if (!clientGone) send({ token }); },
+        const enrichedEmbeddings = enrichWithHybrid(trimmedQuestion, semanticHits, userData, userId, sse.requestId);
+        sse.sendStatus('generating', { embeddings: enrichedEmbeddings.length });
+
+        const streamPromptBuildResult = promptAssembler.build({
+            candidateName: userName,
+            profileContext: userData,
+            semanticContext: enrichedEmbeddings,
+            conversationMemory: null,
+            faqHit: null,
+            selectedSections: [],
+            question: trimmedQuestion,
+            requestId: sse.requestId,
+        });
+        const streamSysInstruction = streamPromptBuildResult?.systemInstruction ?? null;
+        const streamUserPrompt = String(streamPromptBuildResult?.userPrompt ?? streamPromptBuildResult?.prompt ?? '').trim() || trimmedQuestion;
+        const streamCompressionStats = streamPromptBuildResult?.compressionStats ?? null;
+        logger.debug({ userId, requestId: sse.requestId, promptChars: streamUserPrompt.length, streamCompressionStats }, 'chat:stream prompt built');
+
+        await generateResponseStreamFromPrompt(
+            streamUserPrompt,
+            (token) => {
+                if (!clientGone) {
+                    if (firstTokenMs === null) firstTokenMs = Date.now();
+                    sse.sendToken(token);
+                }
+            },
+            streamSysInstruction,
         );
 
-        if (!clientGone) finish({ routed: 'with_data' });
+        if (!clientGone) {
+            const totalMs = Date.now() - startMs;
+            const ttfbMs = firstTokenMs !== null ? firstTokenMs - startMs : undefined;
+
+            sse.sendMetrics({
+                routed: 'with_data',
+                intent: 'retrieval_direct',
+                usedEmbeddings: enrichedEmbeddings.length,
+                ttfbMs,
+                totalMs,
+            });
+            sse.sendStatus('finalizing');
+            sse.finish({ routed: 'with_data' });
+
+            metricsAggregator.recordTelemetry({
+                scope: 'chat:authenticated:stream',
+                totalMs,
+                ttftMs: ttfbMs,
+                route: 'chat/ask/stream',
+                intent: 'retrieval_direct',
+                promptChars: streamUserPrompt.length,
+            });
+        }
     } catch (error) {
         if (clientGone) return;
         if (res.headersSent) {
-            send({ error: error.message || 'Error interno del servidor' });
+            sse.sendError('Error interno al procesar el stream', isRetryableError(error));
             res.end();
         } else {
             next(error);

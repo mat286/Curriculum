@@ -1,5 +1,16 @@
 import axios from 'axios';
-import { API_BASE_URL, STORAGE_KEYS, ERROR_MESSAGES } from '../utils/constants';
+import { API_BASE_URL, STORAGE_KEYS, ERROR_MESSAGES, API_ENDPOINTS } from '../utils/constants';
+
+// Dispatch limpio de sesión — AuthContext escucha este evento para limpiar estado React
+function dispatchLogout() {
+  localStorage.removeItem(STORAGE_KEYS.TOKEN);
+  localStorage.removeItem(STORAGE_KEYS.USER);
+  localStorage.removeItem(STORAGE_KEYS.REFRESH_TOKEN);
+  window.dispatchEvent(new Event('auth:logout'));
+}
+
+// Control de inflight refresh para no hacer múltiples llamadas simultáneas
+let refreshPromise = null;
 // Crear instancia de axios con configuración base
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -39,12 +50,46 @@ api.interceptors.response.use(
           return Promise.reject(new Error(errorMessage));
         }
         case 401:
-        case 403:
-          // No autorizado o token inválido/expirado - limpiar sesión
-          localStorage.removeItem(STORAGE_KEYS.TOKEN);
-          localStorage.removeItem(STORAGE_KEYS.USER);
-          // El componente ProtectedRoute manejará la redirección
+        case 403: {
+          // Intentar renovar el token con el refresh token antes de cerrar sesión
+          const refreshToken = localStorage.getItem(STORAGE_KEYS.REFRESH_TOKEN);
+
+          // No intentar refresh en la propia llamada de refresh (evitar loop infinito)
+          const isRefreshCall = error.config?.url?.includes('/api/user/refresh');
+          const isLoginCall = error.config?.url?.includes('/api/user/google');
+
+          if (refreshToken && !isRefreshCall && !isLoginCall) {
+            // Reutilizar el mismo promise si ya hay un refresh en vuelo
+            if (!refreshPromise) {
+              refreshPromise = axios
+                .post(`${API_BASE_URL}/api/user/refresh`, { refreshToken })
+                .then((res) => {
+                  const { token, refreshToken: newRefresh } = res.data;
+                  localStorage.setItem(STORAGE_KEYS.TOKEN, token);
+                  if (newRefresh) localStorage.setItem(STORAGE_KEYS.REFRESH_TOKEN, newRefresh);
+                  return token;
+                })
+                .catch(() => {
+                  dispatchLogout();
+                  return null;
+                })
+                .finally(() => {
+                  refreshPromise = null;
+                });
+            }
+
+            return refreshPromise.then((newToken) => {
+              if (!newToken) return Promise.reject(new Error(ERROR_MESSAGES.UNAUTHORIZED));
+              // Reintentar la petición original con el nuevo token
+              error.config.headers.Authorization = `Bearer ${newToken}`;
+              return axios(error.config);
+            });
+          }
+
+          // Sin refresh token o llamada de login fallida → limpiar sesión completamente
+          dispatchLogout();
           return Promise.reject(new Error(ERROR_MESSAGES.UNAUTHORIZED));
+        }
         case 404:
           return Promise.reject(new Error(ERROR_MESSAGES.NOT_FOUND));
         case 500:
@@ -89,6 +134,23 @@ export const authService = {
       throw new Error(error.response?.data?.message || 'Error al iniciar sesión con Google');
     }
   },
+
+  logout: async (bearerToken) => {
+    try {
+      await axios.post(
+        `${API_BASE_URL}/api/user/logout`,
+        {},
+        { headers: { Authorization: `Bearer ${bearerToken}` } },
+      );
+    } catch {
+      // Best-effort: no propagar error de logout al usuario
+    }
+  },
+
+  refresh: async (refreshToken) => {
+    const response = await axios.post(`${API_BASE_URL}/api/user/refresh`, { refreshToken });
+    return response.data;
+  },
 };
 
 // Servicio de usuario
@@ -103,6 +165,26 @@ export const userService = {
       ...profileData,
       userId,
     });
+    return response.data;
+  },
+
+  createSectionItem: async (userId, sectionKey, payload) => {
+    const response = await api.post(`/api/user/${userId}/section/${sectionKey}`, payload);
+    return response.data;
+  },
+
+  updateSectionItem: async (userId, sectionKey, itemId, payload) => {
+    const response = await api.put(`/api/user/${userId}/section/${sectionKey}/${itemId}`, payload);
+    return response.data;
+  },
+
+  deleteSectionItem: async (userId, sectionKey, itemId) => {
+    const response = await api.delete(`/api/user/${userId}/section/${sectionKey}/${itemId}`);
+    return response.data;
+  },
+
+  updateRole: async (userId, role) => {
+    const response = await api.patch(`/api/user/${userId}/role`, { role });
     return response.data;
   },
 };
@@ -238,7 +320,8 @@ export const candidateChatService = {
    * Igual que ask() pero con SSE streaming token a token.
    * Conecta directo al backend (port 3000) para evitar el buffering del proxy de Vite.
    */
-  askStream: async (candidateId, message, onToken, onError, onDone) => {
+  askStream: async (candidateId, message, onToken, onError, onDone, options = {}) => {
+    const { signal, onEvent } = options;
     const token = localStorage.getItem(STORAGE_KEYS.TOKEN);
     const streamUrl = import.meta.env.VITE_STREAM_URL || 'http://localhost:3000';
     let response;
@@ -250,9 +333,16 @@ export const candidateChatService = {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
+        signal,
         body: JSON.stringify({ message }),
       });
     } catch (networkErr) {
+      if (networkErr?.name === 'AbortError') {
+        const abortErr = new Error('Solicitud cancelada por el usuario');
+        abortErr.name = 'AbortError';
+        onError?.(abortErr);
+        return;
+      }
       onError?.(new Error('Error de red al conectar con el servidor'));
       return;
     }
@@ -283,10 +373,22 @@ export const candidateChatService = {
 
         for (const part of parts) {
           const line = part.trim();
-          if (!line.startsWith('data:')) continue;
-          const raw = line.slice(5).trim();
+          if (!line) continue;
+
+          const sseLines = line.split('\n');
+          const eventLine = sseLines.find((entry) => entry.startsWith('event:'));
+          const eventName = eventLine ? eventLine.slice(6).trim() : '';
+          const dataLines = sseLines.filter((entry) => entry.startsWith('data:'));
+          if (dataLines.length === 0) continue;
+
+          const raw = dataLines.map((entry) => entry.slice(5).trim()).join('\n').trim();
           try {
             const parsed = JSON.parse(raw);
+            if (eventName && parsed && typeof parsed === 'object' && !parsed.eventType) {
+              parsed.eventType = eventName;
+            }
+
+            onEvent?.(parsed);
             if (parsed.error) { onError?.(new Error(parsed.error)); return; }
             if (parsed.done) { onDone?.(); return; }
             if (parsed.token != null) onToken?.(parsed.token);
@@ -294,6 +396,12 @@ export const candidateChatService = {
         }
       }
     } catch (readErr) {
+      if (readErr?.name === 'AbortError') {
+        const abortErr = new Error('Solicitud cancelada por el usuario');
+        abortErr.name = 'AbortError';
+        onError?.(abortErr);
+        return;
+      }
       onError?.(new Error('Se interrumpió la conexión con el servidor'));
       return;
     } finally {
@@ -354,6 +462,17 @@ export const recruiterService = {
       conversationHistory,
       phase,
       jobProfile,
+    });
+    return response.data;
+  },
+};
+
+// Servicio de observabilidad/metricas
+export const metricsService = {
+  overview: async (hours = 24) => {
+    const safeHours = Number.isFinite(Number(hours)) ? Number(hours) : 24;
+    const response = await api.get('/api/metrics/overview', {
+      params: { hours: safeHours },
     });
     return response.data;
   },

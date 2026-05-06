@@ -1,16 +1,7 @@
 import { generate, generateStream } from './ollamaService.js';
-import { buildResponsePrompt } from '../prompts/response.prompt.js';
 import { OLLAMA_KEEP_ALIVE, OLLAMA_MODEL, OLLAMA_NUM_CTX, OLLAMA_TIMEOUT } from '../config/ollama.js';
 
-/**
- * Genera la respuesta final del chat como la persona del CV.
- * @param {string} userName - Nombre completo del usuario
- * @param {string} question - Pregunta original del usuario
- * @param {Object} data - Datos obtenidos de la base de datos
- * @param {string[]} embeddingResults - Resultados de búsqueda semántica (opcional)
- * @returns {string} Respuesta generada
- */
-// Opciones para respuesta completa (non-stream)
+// Opciones base para Ollama (usado como fallback cuando Gemini no está disponible)
 const RESPONSE_OPTIONS = {
     model: OLLAMA_MODEL,
     keepAlive: OLLAMA_KEEP_ALIVE,
@@ -20,22 +11,21 @@ const RESPONSE_OPTIONS = {
     timeout: OLLAMA_TIMEOUT,
 };
 
-// Opciones para streaming: menos tokens → primer token más rápido
 const STREAM_OPTIONS = {
     ...RESPONSE_OPTIONS,
     numPredict: 220,
 };
 
-export async function generateResponse(userName, question, data, embeddingResults = []) {
-    const prompt = buildResponsePrompt(userName, question, data, embeddingResults);
-    return generate(prompt, RESPONSE_OPTIONS);
+/**
+ * Genera respuesta a partir de un prompt ya construido (e.g. por PromptAssembler).
+ * Acepta systemInstruction separada para pasarla nativamente a Gemini.
+ */
+export async function generateResponseFromPrompt(userPrompt, systemInstruction = null) {
+    const safePrompt = typeof userPrompt === 'string' ? userPrompt : String(userPrompt ?? '');
+    return generate(safePrompt, RESPONSE_OPTIONS, systemInstruction);
 }
 
-/**
- * Igual que generateResponse() pero llama a onChunk(token) por cada token generado.
- * Permite streaming SSE desde el controller.
- */
-export async function generateResponseStream(userName, question, data, embeddingResults = [], onChunk) {
-    const prompt = buildResponsePrompt(userName, question, data, embeddingResults);
-    return generateStream(prompt, STREAM_OPTIONS, onChunk);
+export async function generateResponseStreamFromPrompt(userPrompt, onChunk, systemInstruction = null) {
+    const safePrompt = typeof userPrompt === 'string' ? userPrompt : String(userPrompt ?? '');
+    return generateStream(safePrompt, STREAM_OPTIONS, onChunk, systemInstruction);
 }

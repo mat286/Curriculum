@@ -4,42 +4,8 @@ import CVModal from "../components/CVModal";
 import { useAuth } from "../context/AuthContext";
 import { chatService, userService } from "../services/api";
 import { ERROR_MESSAGES } from "../utils/constants";
+import { toText, toBoolean, normalizeProfileItems as normalizeItems } from "../utils/profileNormalizers";
 import "./Chat.css";
-
-const CHAT_HISTORY_STORAGE_PREFIX = "cv-chat-history";
-const CHAT_DRAFT_STORAGE_PREFIX = "cv-chat-draft";
-const CHAT_SUGGESTIONS = [
-  "Cuéntame mi experiencia profesional en 30 segundos",
-  "¿Cómo responder si me preguntan por mis fortalezas?",
-  "Hazme una simulación de entrevista técnica",
-  "Resúmeme mi perfil para una vacante administrativa",
-];
-
-const toText = (value) => (value === null || typeof value === "undefined" ? "" : String(value));
-const toBoolean = (value) => value === true || value === 1 || value === "1" || value === "true";
-
-const normalizeItems = (items) => {
-  if (!Array.isArray(items)) return [];
-
-  return items.map((item, index) => ({
-    id: item?.id ?? `item-${index}`,
-    titulo: toText(
-      item?.titulo || item?.nombre || item?.idioma || item?.puesto || item?.empresa || item?.institucion
-    ),
-    descripcion: toText(
-      item?.descripcion || item?.detalle || item?.nivel || item?.categoria || item?.tecnologias
-    ),
-    organizacion: toText(item?.organizacion || item?.empresa || item?.institucion || item?.entidad),
-    ubicacion: toText(item?.ubicacion || item?.location),
-    fechaInicio: toText(item?.fechaInicio || item?.fecha_inicio || item?.desde).slice(0, 7),
-    fechaFin: toText(item?.fechaFin || item?.fecha_fin || item?.hasta).slice(0, 7),
-    enCurso: toBoolean(item?.enCurso ?? item?.en_curso ?? item?.actual),
-    enlace: toText(item?.enlace || item?.url || item?.link || item?.github || item?.demo_url),
-    nivel: toText(item?.nivel || item?.level),
-    categoria: toText(item?.categoria || item?.category),
-    rol: toText(item?.rol),
-  }));
-};
 
 const normalizeProfileForChat = (data = {}, fallbackUser = {}) => {
   const about = Array.isArray(data.sobre_mi) ? data.sobre_mi[0] || {} : data.sobre_mi || {};

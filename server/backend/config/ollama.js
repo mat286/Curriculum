@@ -1,12 +1,17 @@
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'mistral:7b';
 const OLLAMA_ROUTER_MODEL = process.env.OLLAMA_ROUTER_MODEL || 'llama3.2:1b';
-const OLLAMA_TIMEOUT = parseInt(process.env.OLLAMA_TIMEOUT || '60000', 10);
+const OLLAMA_TIMEOUT = parseInt(process.env.OLLAMA_TIMEOUT || '120000', 10);
+const OLLAMA_GENERATE_TIMEOUT = parseInt(process.env.OLLAMA_GENERATE_TIMEOUT || String(OLLAMA_TIMEOUT), 10);
+const OLLAMA_FALLBACK_TIMEOUT = parseInt(process.env.OLLAMA_FALLBACK_TIMEOUT || '150000', 10);
 const OLLAMA_KEEP_ALIVE = process.env.OLLAMA_KEEP_ALIVE || '20m';
 const OLLAMA_NUM_PREDICT = parseInt(process.env.OLLAMA_NUM_PREDICT || '160', 10);
 const OLLAMA_NUM_CTX = parseInt(process.env.OLLAMA_NUM_CTX || '2048', 10);
+const OLLAMA_FALLBACK_NUM_CTX = parseInt(process.env.OLLAMA_FALLBACK_NUM_CTX || '1536', 10);
 const OLLAMA_TEMPERATURE = parseFloat(process.env.OLLAMA_TEMPERATURE || '0.2');
 const OLLAMA_NUM_THREAD = process.env.OLLAMA_NUM_THREAD ? parseInt(process.env.OLLAMA_NUM_THREAD, 10) : undefined;
+const OLLAMA_RETRY_ATTEMPTS = parseInt(process.env.OLLAMA_RETRY_ATTEMPTS || '1', 10);
+const OLLAMA_RETRY_BASE_DELAY_MS = parseInt(process.env.OLLAMA_RETRY_BASE_DELAY_MS || '1200', 10);
 const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || 'nomic-embed-text';
 
 export {
@@ -14,10 +19,15 @@ export {
     OLLAMA_MODEL,
     OLLAMA_ROUTER_MODEL,
     OLLAMA_TIMEOUT,
+    OLLAMA_GENERATE_TIMEOUT,
+    OLLAMA_FALLBACK_TIMEOUT,
     OLLAMA_KEEP_ALIVE,
     OLLAMA_NUM_PREDICT,
     OLLAMA_NUM_CTX,
+    OLLAMA_FALLBACK_NUM_CTX,
     OLLAMA_TEMPERATURE,
     OLLAMA_NUM_THREAD,
+    OLLAMA_RETRY_ATTEMPTS,
+    OLLAMA_RETRY_BASE_DELAY_MS,
     EMBEDDING_MODEL,
 };

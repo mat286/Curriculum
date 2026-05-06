@@ -11,6 +11,7 @@ import { NormalizeQuestionService } from './NormalizeQuestionService.js';
 import { IntentClassifierService } from './IntentClassifierService.js';
 import { ContextSelectorService } from './ContextSelectorService.js';
 import { FAQSemanticRetriever } from '../faq/FAQSemanticRetriever.js';
+import { DynamicTopKSelector } from '../../services/DynamicTopKSelector.js';
 
 const DEFAULT_OPTIONS = {
     model: process.env.OLLAMA_MODEL || 'mistral:7b',
@@ -18,8 +19,27 @@ const DEFAULT_OPTIONS = {
     temperature: 0.2,
     numPredict: 220,
     numCtx: 2048,
-    timeout: parseInt(process.env.OLLAMA_TIMEOUT || '60000', 10),
+    timeout: parseInt(process.env.OLLAMA_TIMEOUT || '120000', 10),
 };
+
+function pickOptionalMetric(value) {
+    return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function buildStreamMetrics({ telemetry, routed, cached }) {
+    const ttfbFromMark = telemetry?.marks?.ttfb;
+    const semanticMark = telemetry?.marks?.semantic;
+    const promptMark = telemetry?.marks?.prompt;
+
+    return {
+        ttfbMs: pickOptionalMetric(ttfbFromMark?.ttfbMs ?? ttfbFromMark?.ms),
+        totalMs: Date.now() - telemetry.start,
+        routed,
+        cached: Boolean(cached),
+        semanticMs: pickOptionalMetric(semanticMark?.semanticMs ?? semanticMark?.ms),
+        promptChars: pickOptionalMetric(promptMark?.promptChars),
+    };
+}
 
 export class ChatOrchestrator {
     constructor() {
@@ -44,8 +64,10 @@ export class ChatOrchestrator {
         return `session:${requesterId || 'anon'}:candidate:${candidateId}`;
     }
 
-    async prepareContext({ candidateId, message, requesterId }) {
-        const telemetry = new ChatTelemetry('candidate-chat', { candidateId, requesterId });
+    async prepareContext({ candidateId, message, requesterId, requestId }) {
+        this.dynamicTopKSelector = new DynamicTopKSelector();
+        const telemetry = new ChatTelemetry('candidate-chat', { candidateId, requesterId, requestId });
+        this.telemetry = telemetry;
         const normalizedQuestion = this.normalizeService.normalize(message);
         telemetry.mark('normalize');
 
@@ -95,20 +117,49 @@ export class ChatOrchestrator {
 
         const selected = this.contextSelector.select(intentResult.intent, intentResult.confidence);
         telemetry.mark('selector', { include: selected.include.join(',') });
+// P0-001: Dynamic Top-K Selection
+        const topKSelection = this.dynamicTopKSelector.selectTopK({
+            intentConfidence: intentResult.confidence,
+            semanticSimilarities: [],
+            questionLength: normalizedQuestion.length,
+            intent: intentResult.intent,
+            candidateId,
+            requestId,
+        });
+        const topK = this.dynamicTopKSelector.getEffectiveTopK(topKSelection.topK);
+        telemetry.mark('topk-selection', {
+            topKSelected: topK,
+            decision: topKSelection.decision,
+            confidenceScore: topKSelection.confidenceScore,
+        });
 
         const semantic = await this.semantic.retrieve({
             candidateId,
             query: normalizedQuestion,
             includeSections: selected.include,
-            topK: 3,
+            topK,
             timeoutMs: 500,
             minSimilarity: parseFloat(process.env.SEMANTIC_MIN_SIMILARITY || '0.68'),
+            profileContext: this.contextSelector.pickFromProfile(
+                aggregate.snapshot?.json || aggregate.profile,
+                selected.include,
+            ),
         });
-        telemetry.mark('semantic', { reason: semantic.reason, semanticMs: semantic.durationMs, chunkCount: semantic.chunks.length });
+        telemetry.mark('semantic', {
+            reason: semantic.reason,
+            semanticMs: semantic.durationMs,
+            topKUsed: topK,
+            chunkCount: semantic.chunks.length,
+            chunksBeforeDedupe: semantic.chunkStats?.beforeDedupe || semantic.chunks.length,
+            chunksAfterDedupe: semantic.chunkStats?.afterDedupe || semantic.chunks.length,
+            searchMethod: semantic.method || 'semantic',
+            hybridStats: semantic.hybridStats,
+            rerankingStats: semantic.rerankingStats,
+        });
 
         const profileContextRaw = aggregate.snapshot?.json || aggregate.profile;
         const profileContext = this.contextSelector.pickFromProfile(profileContextRaw, selected.include);
-        const prompt = this.promptAssembler.build({
+        const promptResult = this.promptAssembler.build({
             candidateName: aggregate.candidateName,
             profileContext,
             semanticContext: semantic.chunks,
@@ -116,8 +167,24 @@ export class ChatOrchestrator {
             faqHit,
             selectedSections: selected.include,
             question: message,
+            requestId,
         });
-        telemetry.mark('prompt', { promptChars: prompt.length, tokenEstimate: Math.ceil(prompt.length / 4) });
+
+        // Compatibilidad dual: legacy string/prompt y nuevo userPrompt
+        const promptPayload = (promptResult && typeof promptResult === 'object') ? promptResult : null;
+        const prompt = String(
+            typeof promptResult === 'string'
+                ? promptResult
+                : (promptPayload?.userPrompt ?? promptPayload?.prompt ?? ''),
+        );
+        const compressionStats = promptPayload?.compressionStats ?? null;
+        const systemInstruction = promptPayload?.systemInstruction ?? null;
+
+        telemetry.mark('prompt', { 
+            promptChars: prompt.length, 
+            tokenEstimate: Math.ceil(prompt.length / 4),
+            compressionStats,
+        });
 
         return {
             route: 'llm',
@@ -129,11 +196,12 @@ export class ChatOrchestrator {
             selectedSections: selected.include,
             faqHit,
             telemetry,
+            systemInstruction,
         };
     }
 
-    async ask({ candidateId, message, requesterId }) {
-        const prep = await this.prepareContext({ candidateId, message, requesterId });
+    async ask({ candidateId, message, requesterId, requestId }) {
+        const prep = await this.prepareContext({ candidateId, message, requesterId, requestId });
 
         if (prep.route === 'l1-greeting') {
             return { answer: prep.greeting, routed: 'fast-direct', candidateId };
@@ -172,12 +240,22 @@ export class ChatOrchestrator {
         return payload;
     }
 
-    async askStream({ candidateId, message, requesterId, onToken }) {
-        const prep = await this.prepareContext({ candidateId, message, requesterId });
+    async askStream({ candidateId, message, requesterId, requestId, onToken }) {
+        const prep = await this.prepareContext({ candidateId, message, requesterId, requestId });
 
         if (prep.route === 'l1-greeting') {
             onToken(prep.greeting);
-            return { routed: 'fast-direct', candidateId, done: true };
+            return {
+                routed: 'fast-direct',
+                candidateId,
+                done: true,
+                cached: false,
+                metrics: buildStreamMetrics({
+                    telemetry: prep.telemetry,
+                    routed: 'fast-direct',
+                    cached: false,
+                }),
+            };
         }
 
         if (prep.route === 'faq-direct') {
@@ -186,8 +264,14 @@ export class ChatOrchestrator {
                 routed: 'faq-direct',
                 candidateId,
                 done: true,
+                cached: false,
                 faqHit: true,
                 faqSimilarity: prep.faqHit.similarity,
+                metrics: buildStreamMetrics({
+                    telemetry: prep.telemetry,
+                    routed: 'faq-direct',
+                    cached: false,
+                }),
             };
         }
 
@@ -197,7 +281,18 @@ export class ChatOrchestrator {
             for (let i = 0; i < chunks.length; i += 3) {
                 onToken(chunks.slice(i, i + 3).join(''));
             }
-            return { routed: prep.cachedResponse.routed || 'with_data', candidateId, done: true, cached: true };
+            const routed = prep.cachedResponse.routed || 'with_data';
+            return {
+                routed,
+                candidateId,
+                done: true,
+                cached: true,
+                metrics: buildStreamMetrics({
+                    telemetry: prep.telemetry,
+                    routed,
+                    cached: true,
+                }),
+            };
         }
 
         let fullResponse = '';
@@ -229,7 +324,17 @@ export class ChatOrchestrator {
             faqSimilarity: prep.faqHit?.similarity || 0,
         });
 
-        return { routed: 'with_data', candidateId, done: true };
+        return {
+            routed: 'with_data',
+            candidateId,
+            done: true,
+            cached: false,
+            metrics: buildStreamMetrics({
+                telemetry: prep.telemetry,
+                routed: 'with_data',
+                cached: false,
+            }),
+        };
     }
 }
 

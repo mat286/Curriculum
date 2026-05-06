@@ -11,6 +11,24 @@ export default function TelemetryDashboard() {
   const [error, setError] = useState(null);
   const [lastUpdate, setLastUpdate] = useState(null);
 
+  const getFirstNumeric = (sources, paths) => {
+    for (const source of sources) {
+      if (!source) continue;
+
+      for (const path of paths) {
+        const value = path
+          .split('.')
+          .reduce((acc, key) => (acc !== null && acc !== undefined ? acc[key] : undefined), source);
+
+        if (typeof value === 'number' && Number.isFinite(value)) {
+          return value;
+        }
+      }
+    }
+
+    return null;
+  };
+
   // Fetch metrics from backend
   const fetchMetrics = async () => {
     try {
@@ -71,6 +89,35 @@ export default function TelemetryDashboard() {
   if (!metrics) {
     return null;
   }
+
+  const stageLatencies = metrics.stageLatencies || {};
+  const promptStats = metrics.promptStats || {};
+
+  const ttftP50 = getFirstNumeric(
+    [stageLatencies, metrics],
+    ['ttft.p50', 'ttft.p50Ms', 'ttftP50', 'ttftP50Ms']
+  );
+  const ttftP95 = getFirstNumeric(
+    [stageLatencies, metrics],
+    ['ttft.p95', 'ttft.p95Ms', 'ttftP95', 'ttftP95Ms']
+  );
+  const semanticP50 = getFirstNumeric(
+    [stageLatencies, metrics],
+    ['semantic.p50', 'semantic.p50Ms', 'semanticP50', 'semanticP50Ms']
+  );
+  const semanticP95 = getFirstNumeric(
+    [stageLatencies, metrics],
+    ['semantic.p95', 'semantic.p95Ms', 'semanticP95', 'semanticP95Ms']
+  );
+
+  const promptAvgChars = getFirstNumeric(
+    [promptStats, metrics],
+    ['avgChars', 'avg_chars', 'averageChars']
+  );
+  const promptP95Chars = getFirstNumeric(
+    [promptStats, metrics],
+    ['p95Chars', 'p95_chars']
+  );
 
   // Calculate trends (mock data - in production, track history)
   const errorTrend = metrics.errorRate > 2 ? '↑' : metrics.errorRate > 0 ? '→' : '↓';
@@ -194,7 +241,55 @@ export default function TelemetryDashboard() {
         </div>
       </section>
 
-      {/* Section 3: Routes Distribution */}
+      {/* Section 3: Stage Latencies */}
+      <section className="telemetry-section">
+        <h2 className="telemetry-section-title">Latencias por Etapa</h2>
+        <div className="telemetry-grid">
+          <TelemetryChart
+            title="TTFT P50"
+            value={ttftP50}
+            unit={ttftP50 === null ? undefined : 'ms'}
+            color="primary"
+          />
+          <TelemetryChart
+            title="TTFT P95"
+            value={ttftP95}
+            unit={ttftP95 === null ? undefined : 'ms'}
+            color="warning"
+          />
+          <TelemetryChart
+            title="Semantic P50"
+            value={semanticP50}
+            unit={semanticP50 === null ? undefined : 'ms'}
+            color="primary"
+          />
+          <TelemetryChart
+            title="Semantic P95"
+            value={semanticP95}
+            unit={semanticP95 === null ? undefined : 'ms'}
+            color="warning"
+          />
+        </div>
+      </section>
+
+      {/* Section 4: Prompt Budget */}
+      <section className="telemetry-section">
+        <h2 className="telemetry-section-title">Prompt Budget</h2>
+        <div className="telemetry-grid">
+          <TelemetryChart
+            title="Promedio de Caracteres"
+            value={promptAvgChars}
+            color="primary"
+          />
+          <TelemetryChart
+            title="P95 de Caracteres"
+            value={promptP95Chars}
+            color="warning"
+          />
+        </div>
+      </section>
+
+      {/* Section 5: Routes Distribution */}
       <section className="telemetry-section">
         <h2 className="telemetry-section-title">Distribución de Rutas</h2>
         <div className="telemetry-table-container">
@@ -238,7 +333,7 @@ export default function TelemetryDashboard() {
         </div>
       </section>
 
-      {/* Section 4: Top Intents */}
+      {/* Section 6: Top Intents */}
       <section className="telemetry-section">
         <h2 className="telemetry-section-title">Top 5 Intents</h2>
         {topIntentsArray.length > 0 ? (
@@ -274,7 +369,7 @@ export default function TelemetryDashboard() {
         )}
       </section>
 
-      {/* Section 5: Live Stats (Last Minute) */}
+      {/* Section 7: Live Stats (Last Minute) */}
       <section className="telemetry-section">
         <h2 className="telemetry-section-title">Últimos 60 Segundos</h2>
         <div className="telemetry-grid">

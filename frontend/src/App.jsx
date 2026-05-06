@@ -10,10 +10,11 @@ import RecruiterPage from "./pages/RecruiterPage";
 import NotFoundPage from "./pages/NotFoundPage";
 import OnboardingPage from "./pages/OnboardingPage";
 import ErrorBoundary from "./components/ErrorBoundary";
-import ProtectedRoute from "./components/ProtectedRoute";
+import ProtectedRoute, { RoleRoute } from "./components/ProtectedRoute";
 import { useAuth } from "./context/AuthContext";
 import "./index.css";
 import AdminPage from "./pages/AdminPage";
+import MetricsPage from "./pages/MetricsPage";
 
 export default function App() {
     const { isAuthenticated, loading, user, onboardingCompleted } = useAuth();
@@ -74,8 +75,16 @@ export default function App() {
                     <Route
                         path="/search"
                         element={
-                            <ProtectedRoute>
+                            <RoleRoute requiredRole="recruiter">
                                 <RecruiterPage />
+                            </RoleRoute>
+                        }
+                    />
+                    <Route
+                        path="/metrics"
+                        element={
+                            <ProtectedRoute>
+                                <MetricsPage />
                             </ProtectedRoute>
                         }
                     />

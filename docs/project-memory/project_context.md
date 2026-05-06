@@ -22,12 +22,13 @@ Los CVs estáticos (PDF/web) no permiten interacción. Este sistema convierte el
 
 ## Stack
 ```
-Frontend:  React 19 + Vite 5 + React Router 7 + TailwindCSS 4 + @react-oauth/google
+Frontend:  React 19 + Vite 5 + React Router 7 + @react-oauth/google + CSS custom properties
 Backend:   Node.js ESM + Express 4 + mysql2 + pino + helmet + express-rate-limit
-IA:        @google/generative-ai (Gemini) + Ollama (local, fallback + embeddings)
+IA:        @google/generative-ai (Gemini — proveedor principal)
+           Ollama (solo fallback automático cuando Gemini falla por cuota/red + embeddings nomic)
 Vector DB: ChromaDB v1.9
 DB:        MySQL 8 (Docker)
-Auth:      JWT (jsonwebtoken) + Google OAuth (google-auth-library)
+Auth:      JWT access 15m + refresh 7d con rotación (jsonwebtoken) + Google OAuth (google-auth-library)
 Infra:     Docker Compose (mysql + ollama + chromadb + backend)
 ```
 
@@ -113,3 +114,43 @@ Ver `project_snapshot.md`
 - **Backend Software Engineer Agent**: módulos Node.js, servicios IA, DB
 - **Frontend Architect Agent**: UI/UX, componentes React, integración APIs
 - **QA + Security Testing Agent**: auditoría, tests, vulnerabilidades
+
+## Roadmap
+
+### Sprint P0 — Latencia y Calidad Conversacional (Activo)
+- **Objetivo**: reducir TTFT y latencia total sin degradar precisión factual.
+- **Entregables**:
+  - SSE v2 con eventos de estado + heartbeat + compatibilidad backward.
+  - Top-k dinámico + dedupe + compresión de contexto.
+  - UX streaming con buffering, cancelación y reintento.
+  - Métricas p50/p95 por etapa y correlación E2E.
+- **Dependencias**:
+  - Backend SSE contract -> Frontend rendering states.
+  - IA retrieval policy -> Backend orchestration + telemetry.
+
+### Sprint P1 — Escalabilidad Operativa
+- Redis cache distribuido + invalidación por snapshot.
+- Cola de indexación embeddings con DLQ.
+- Contrato versionado IA-backend con budgets por bloque.
+
+### Sprint P2 — Calidad Avanzada
+- Hybrid search SQL + vector con fusion score.
+- Reranking dedicado y memoria jerárquica.
+- A/B experiments con criterios de éxito cuantitativos.
+
+## Decisiones
+
+### DEC-2026-05-05-01
+- **Contexto**: el foco principal del producto es entrevista conversacional ultra-rápida.
+- **Decisión**: priorizar TTFT p95 y latencia total p95 por encima de features secundarias.
+- **Impacto**: backlog reordenado a Sprint P0 técnico transversal.
+
+### DEC-2026-05-05-02
+- **Contexto**: frontend y backend no comparten contrato SSE enriquecido.
+- **Decisión**: estandarizar eventos `ack/status/token/metrics/error/done` con backward compatibility.
+- **Impacto**: habilita UX de estados, cancelación, retry y observabilidad E2E.
+
+### DEC-2026-05-05-03
+- **Contexto**: prompts y retrieval consumen tokens de forma no adaptativa.
+- **Decisión**: introducir top-k dinámico + compresión + dedupe como quick wins P0.
+- **Impacto**: menor latencia y costo, mejor grounding bajo budget.

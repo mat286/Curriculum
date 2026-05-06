@@ -73,19 +73,23 @@ export class GeminiProvider extends AIProvider {
     /**
      * Genera texto libre con Gemini.
      */
-    async generate(prompt, options = {}) {
+    async generate(prompt, options = {}, systemInstruction = null) {
         if (!prompt || typeof prompt !== 'string') {
             throw new LLMError('El prompt no puede estar vacío');
         }
 
         const timeout = options.timeout ?? GEMINI_TIMEOUT;
-        const model = this._client.getGenerativeModel({
+        const modelConfig = {
             model: GEMINI_MODEL,
             generationConfig: {
                 temperature: options.temperature ?? 0.2,
                 maxOutputTokens: options.numPredict ?? 500,
             },
-        });
+        };
+        if (systemInstruction) {
+            modelConfig.systemInstruction = systemInstruction;
+        }
+        const model = this._client.getGenerativeModel(modelConfig);
 
         const timeoutPromise = new Promise((_, reject) =>
             setTimeout(() => reject(new LLMError(`Gemini timeout después de ${timeout}ms`)), timeout)
@@ -174,18 +178,22 @@ export class GeminiProvider extends AIProvider {
      * Igual que generate() pero llama a onChunk(token) por cada fragmento recibido,
      * permitiendo streaming hacia el cliente via SSE.
      */
-    async generateStream(prompt, options = {}, onChunk) {
+    async generateStream(prompt, options = {}, onChunk, systemInstruction = null) {
         if (!prompt || typeof prompt !== 'string') {
             throw new LLMError('El prompt no puede estar vacío');
         }
 
-        const model = this._client.getGenerativeModel({
+        const modelConfig = {
             model: GEMINI_MODEL,
             generationConfig: {
                 temperature: options.temperature ?? 0.2,
                 maxOutputTokens: options.numPredict ?? 500,
             },
-        });
+        };
+        if (systemInstruction) {
+            modelConfig.systemInstruction = systemInstruction;
+        }
+        const model = this._client.getGenerativeModel(modelConfig);
 
         try {
             const streamResult = await model.generateContentStream(prompt.trim());

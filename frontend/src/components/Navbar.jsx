@@ -6,7 +6,7 @@ import "./Navbar.css";
 export default function Navbar() {
     const location = useLocation();
     const navigate = useNavigate();
-    const { isAuthenticated, user, logout } = useAuth();
+    const { isAuthenticated, user, logout, isRecruiter } = useAuth();
     const [menuOpen, setMenuOpen] = useState(false);
 
     useEffect(() => {
@@ -57,10 +57,12 @@ export default function Navbar() {
                                 <li className={location.pathname === "/perfil" ? "active" : ""}>
                                     <Link to="/perfil">Mi perfil</Link>
                                 </li>
-                                <li className={location.pathname === "/search" ? "active" : ""}>
-                                    <Link to="/search">Buscar candidatos</Link>
-                                </li>
-                                <li className={location.pathname === `/\${user?.id}` ? "active" : ""}>
+                                {isRecruiter && (
+                                    <li className={location.pathname === "/search" ? "active" : ""}>
+                                        <Link to="/search">Buscar candidatos</Link>
+                                    </li>
+                                )}
+                                <li className={location.pathname === `/${user?.id}` ? "active" : ""}>
                                     <Link to={`/${user?.id}`}>Hablar con mi IA</Link>
                                 </li>
                                    {user?.isAdmin && (
@@ -77,7 +79,12 @@ export default function Navbar() {
                             <>
                                 <div className="navbar-user">
                                     <span className="navbar-user-label">Sesión activa</span>
-                                    <strong className="navbar-username">{displayName}</strong>
+                                    <strong className="navbar-username">
+                                        {displayName}
+                                        <span className="navbar-role-badge" data-role={user?.role || 'candidate'}>
+                                            {user?.role === 'recruiter' ? 'Recruiter' : 'Candidato'}
+                                        </span>
+                                    </strong>
                                 </div>
                                 <Link to={`/${user?.id}`} className="nav-cta">
                                     Abrir demo

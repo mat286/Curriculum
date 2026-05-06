@@ -1,16 +1,19 @@
 import express from 'express';
 import metricsAggregator from '../config/metricsAggregator.js';
 import { autenticarUsuario } from '../middlewares/authMiddleware.js';
+import { getOverview } from '../controllers/metricsController.js';
 import logger from '../utils/logger.js';
 
 const router = express.Router();
 
+router.get('/overview', autenticarUsuario, getOverview);
+
 /**
  * GET /api/metrics
  * Retorna métricas agregadas en tiempo real
- * Público - sin autenticación requerida
+ * Requiere autenticación — expone datos operativos internos
  */
-router.get('/', (req, res) => {
+router.get('/', autenticarUsuario, (req, res) => {
     try {
         const metrics = metricsAggregator.getMetrics();
         res.json(metrics);
