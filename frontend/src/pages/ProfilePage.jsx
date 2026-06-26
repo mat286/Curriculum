@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import ProfileListSection from "../components/profile/ProfileListSection";
 import ProfileSection from "../components/profile/ProfileSection";
 import ProfileSidebar from "../components/profile/ProfileSidebar";
@@ -173,8 +174,11 @@ const NAV_SECTIONS = [
     { key: "sobreMi", label: "Sobre mí" },
     { key: "experiencias", label: "Experiencia" },
     { key: "estudios", label: "Formación" },
+    { key: "cursos", label: "Cursos" },
     { key: "proyectos", label: "Proyectos" },
     { key: "habilidades", label: "Skills" },
+    { key: "idiomas", label: "Idiomas" },
+    { key: "familia", label: "Entorno familiar" },
     { key: "respuestas", label: "Preguntas frecuentes" },
     { key: "faqs-avatar", label: "FAQs del avatar" },
 ];
@@ -410,7 +414,9 @@ export default function ProfilePage() {
     const parsedUserId = Number(user?.id ?? user?.userId);
     const userId = Number.isFinite(parsedUserId) ? parsedUserId : null;
     const [profile, setProfile] = useState(null);
-    const [openSection, setOpenSection] = useState("sobreMi");
+    const [openSection, setOpenSection] = useState("datos");
+    const [activeSection, setActiveSection] = useState("datos");
+    const [expandedRespuestaId, setExpandedRespuestaId] = useState(null);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [isDirty, setIsDirty] = useState(false);
@@ -475,6 +481,77 @@ export default function ProfilePage() {
         const completed = checklist.filter(Boolean).length;
         return Math.round((completed / checklist.length) * 100);
     }, [profile]);
+
+    const sectionProgressMap = useMemo(() => {
+        if (!profile) return {};
+
+        const byLength = (items, target = 1) => Math.min(100, Math.round((items.length / target) * 100));
+        const textFill = (value) => Boolean(toText(value).trim());
+        const safePercent = (done, total) => (total ? Math.round((done / total) * 100) : 0);
+        const validRespuestas = profile.respuestas.filter(
+            (item) => item.pregunta.trim().length > 0 && item.respuesta.trim().length > 0
+        );
+
+        const datosDone = [
+            textFill(profile.nombre),
+            textFill(profile.apellido),
+            textFill(profile.email),
+            textFill(profile.telefono),
+            textFill(profile.nacionalidad),
+            textFill(profile.direccion),
+        ].filter(Boolean).length;
+
+        const marcaDone = [
+            textFill(profile.resumen),
+            textFill(profile.puestoActual),
+            textFill(profile.objetivoProfesional),
+            textFill(profile.disponibilidad),
+            textFill(profile.modalidadPreferida),
+            textFill(profile.linkedinUrl) || textFill(profile.githubUrl) || textFill(profile.portfolioUrl),
+        ].filter(Boolean).length;
+
+        return {
+            "inspector-ia": completion,
+            datos: safePercent(datosDone, 6),
+            marca: safePercent(marcaDone, 6),
+            sobreMi: textFill(profile.sobreMi) ? 100 : 0,
+            experiencias: byLength(profile.experiencias, 2),
+            estudios: byLength(profile.estudios, 1),
+            cursos: byLength(profile.cursos, 1),
+            proyectos: byLength(profile.proyectos, 1),
+            habilidades: byLength(profile.habilidades, 4),
+            idiomas: byLength(profile.idiomas, 2),
+            familia: safePercent(
+                [
+                    textFill(profile.familia?.estadoCivil),
+                    textFill(profile.familia?.hijos),
+                    textFill(profile.familia?.hermanos),
+                    textFill(profile.familia?.padresViven),
+                    textFill(profile.familia?.observaciones),
+                ].filter(Boolean).length,
+                5
+            ),
+            respuestas: byLength(validRespuestas, 3),
+            "faqs-avatar": 0,
+        };
+    }, [profile, completion]);
+
+    const sidebarSections = useMemo(
+        () =>
+            NAV_SECTIONS.map((section) => {
+                const progress = sectionProgressMap[section.key] || 0;
+                const state = progress >= 95 ? "done" : progress > 0 ? "partial" : "empty";
+                return { ...section, progress, state };
+            }),
+        [sectionProgressMap]
+    );
+
+    const currentSectionIndex = useMemo(
+        () => sidebarSections.findIndex((section) => section.key === activeSection),
+        [sidebarSections, activeSection]
+    );
+
+    const currentSection = sidebarSections[currentSectionIndex] || sidebarSections[0] || null;
 
     const aiInspectorData = useMemo(() => {
         if (!profile) {
@@ -605,21 +682,25 @@ export default function ProfilePage() {
         return { sectionCompletion, dataSummary, criticalMissing, qualityChecklist };
     }, [profile]);
 
+    const setSection = (section) => {
+        setOpenSection(section);
+        setActiveSection(section);
+    };
+
     const toggleSection = (section) => {
-        setOpenSection((current) => (current === section ? null : section));
+        setSection(section);
     };
 
     const jumpToSection = (section) => {
-        setOpenSection(section);
+        setSection(section);
+    };
 
-        if (typeof window !== "undefined") {
-            window.requestAnimationFrame(() => {
-                document.getElementById(`section-${section}`)?.scrollIntoView({
-                    behavior: "smooth",
-                    block: "start",
-                });
-            });
-        }
+    const goToAdjacentSection = (direction) => {
+        if (!sidebarSections.length) return;
+        const fallbackIndex = currentSectionIndex >= 0 ? currentSectionIndex : 0;
+        const nextIndex = fallbackIndex + direction;
+        if (nextIndex < 0 || nextIndex >= sidebarSections.length) return;
+        setSection(sidebarSections[nextIndex].key);
     };
 
     const handleChange = (e) => {
@@ -647,6 +728,7 @@ export default function ProfilePage() {
                 ...current,
                 [field]: [...current[field], createListItem(field)],
             }));
+            setSection(field);
             setIsDirty(true);
             showActionFeedback(`Nuevo ${singularLabel} agregado.`, "success");
             return;
@@ -663,6 +745,7 @@ export default function ProfilePage() {
                 ...current,
                 [field]: [...current[field], createdItem],
             }));
+            setSection(field);
             showActionFeedback(`Nuevo ${singularLabel} agregado y sincronizado.`, "success");
         } catch (err) {
             console.error(`Error creando item de ${field}:`, err);
@@ -670,6 +753,7 @@ export default function ProfilePage() {
                 ...current,
                 [field]: [...current[field], createListItem(field)],
             }));
+            setSection(field);
             setIsDirty(true);
             showActionFeedback(
                 `No se pudo sincronizar al instante. Puedes completar y guardar al final.`,
@@ -683,10 +767,13 @@ export default function ProfilePage() {
         const sectionKey = SECTION_KEY_BY_FIELD[field];
 
         if (!userId || !sectionKey) {
+            const id = `${field}-${Date.now()}`;
             setProfile((current) => ({
                 ...current,
-                [field]: [...current[field], { id: `${field}-${Date.now()}`, pregunta: "", respuesta: "" }],
+                [field]: [...current[field], { id, pregunta: "", respuesta: "" }],
             }));
+            setExpandedRespuestaId(id);
+            setSection("respuestas");
             setIsDirty(true);
             showActionFeedback("Nuevo bloque de pregunta y respuesta agregado.", "success");
             return;
@@ -703,13 +790,18 @@ export default function ProfilePage() {
                 ...current,
                 [field]: [...current[field], createdItem],
             }));
+            setExpandedRespuestaId(createdItem.id);
+            setSection("respuestas");
             showActionFeedback("Nuevo bloque agregado y sincronizado.", "success");
         } catch (err) {
             console.error("Error creando pregunta/respuesta:", err);
+            const id = `${field}-${Date.now()}`;
             setProfile((current) => ({
                 ...current,
-                [field]: [...current[field], { id: `${field}-${Date.now()}`, pregunta: "", respuesta: "" }],
+                [field]: [...current[field], { id, pregunta: "", respuesta: "" }],
             }));
+            setExpandedRespuestaId(id);
+            setSection("respuestas");
             setIsDirty(true);
             showActionFeedback(
                 "No se pudo sincronizar al instante. Puedes completar y guardar al final.",
@@ -738,6 +830,10 @@ export default function ProfilePage() {
                 [field]: current[field].filter((item) => item.id !== id),
             };
         });
+
+        if (field === "respuestas" && expandedRespuestaId === id) {
+            setExpandedRespuestaId(null);
+        }
 
         if (!shouldDeleteRemotely) {
             setIsDirty(true);
@@ -798,6 +894,7 @@ export default function ProfilePage() {
             if (result.success) {
                 setSuccess(SUCCESS_MESSAGES.PROFILE_SAVED);
                 setIsDirty(false);
+                showActionFeedback("Perfil guardado correctamente. Tu avatar ya tiene el contexto actualizado.", "success");
                 setTimeout(() => setSuccess(null), 3000);
             } else {
                 setError(result.message || "Error al guardar datos");
@@ -814,7 +911,16 @@ export default function ProfilePage() {
         return (
             <div className="profile-page theme-dark">
                 <div className="profile-container">
-                    <div className="loading">Cargando perfil...</div>
+                    <div className="profile-loading-skeleton">
+                        <div className="skeleton-line skeleton-line--title" />
+                        <div className="skeleton-line" />
+                        <div className="skeleton-line skeleton-line--short" />
+                        <div className="skeleton-grid">
+                            <div className="skeleton-card" />
+                            <div className="skeleton-card" />
+                            <div className="skeleton-card" />
+                        </div>
+                    </div>
                 </div>
             </div>
         );
@@ -886,224 +992,308 @@ export default function ProfilePage() {
 
                 <div className="profile-layout">
                     <div className="profile-main">
-                        <ProfileAIContextInspector
-                            completion={completion}
-                            sectionCompletion={aiInspectorData.sectionCompletion}
-                            dataSummary={aiInspectorData.dataSummary}
-                            criticalMissing={aiInspectorData.criticalMissing}
-                            qualityChecklist={aiInspectorData.qualityChecklist}
-                        />
+                        <section className="profile-workbench" aria-label="Navegacion de secciones">
+                            <div className="profile-section-pills" role="tablist" aria-label="Secciones del perfil">
+                                {sidebarSections.map((section) => (
+                                    <button
+                                        key={section.key}
+                                        type="button"
+                                        role="tab"
+                                        aria-selected={activeSection === section.key}
+                                        aria-controls={`section-${section.key}`}
+                                        className={activeSection === section.key ? "is-active" : ""}
+                                        onClick={() => jumpToSection(section.key)}
+                                    >
+                                        <span>{section.label}</span>
+                                        <small>{section.progress || 0}%</small>
+                                    </button>
+                                ))}
+                            </div>
 
-                        <ProfileSection
+                            <div className="profile-action-strip">
+                                <div>
+                                    <strong>{currentSection?.label || "Perfil"}</strong>
+                                    <small>
+                                        {currentSection?.progress || 0}% completado en esta seccion · {completion}% total
+                                    </small>
+                                </div>
+
+                                <div className="profile-action-strip__controls">
+                                    <button
+                                        type="button"
+                                        className="profile-ghost-btn"
+                                        onClick={() => goToAdjacentSection(-1)}
+                                        disabled={currentSectionIndex <= 0}
+                                    >
+                                        Anterior
+                                    </button>
+
+                                    <button
+                                        type="button"
+                                        className="profile-ghost-btn"
+                                        onClick={() => goToAdjacentSection(1)}
+                                        disabled={currentSectionIndex >= sidebarSections.length - 1}
+                                    >
+                                        Siguiente
+                                    </button>
+
+                                    <Link to="/chat" className="sidebar-primary-btn">
+                                        Ir al chat
+                                    </Link>
+
+                                    <button type="button" className="save-btn compact" onClick={handleSubmit} disabled={saving}>
+                                        {saving ? "Guardando..." : "Guardar"}
+                                    </button>
+                                </div>
+                            </div>
+                        </section>
+
+                        {activeSection === "inspector-ia" && (
+                            <div id="section-inspector-ia" className="profile-active-panel" role="tabpanel">
+                                <ProfileAIContextInspector
+                                    completion={completion}
+                                    sectionCompletion={aiInspectorData.sectionCompletion}
+                                    dataSummary={aiInspectorData.dataSummary}
+                                    criticalMissing={aiInspectorData.criticalMissing}
+                                    qualityChecklist={aiInspectorData.qualityChecklist}
+                                />
+                            </div>
+                        )}
+
+                        {activeSection === "datos" && <ProfileSection
                             sectionKey="datos"
                             title="Datos personales"
-                            hint="Información básica para identificar tu perfil."
+                            hint="Completa primero identidad y contacto para que recruiters puedan ubicarte rápido."
                             isOpen={openSection === "datos"}
                             onToggle={() => toggleSection("datos")}
                         >
-                            <div className="profile-grid">
-                                <div className="field-group">
-                                    <label htmlFor="nombre">Nombre</label>
-                                    <input id="nombre" name="nombre" value={profile.nombre} onChange={handleChange} placeholder="Tu nombre" />
-                                </div>
+                            <div className="profile-section-group">
+                                <h3 className="profile-subgroup-title">Identidad</h3>
+                                <div className="profile-grid profile-grid--compact">
+                                    <div className="field-group">
+                                        <label htmlFor="nombre">Nombre</label>
+                                        <input id="nombre" name="nombre" value={profile.nombre} onChange={handleChange} placeholder="Tu nombre" />
+                                    </div>
 
-                                <div className="field-group">
-                                    <label htmlFor="apellido">Apellido</label>
-                                    <input id="apellido" name="apellido" value={profile.apellido} onChange={handleChange} placeholder="Tu apellido" />
-                                </div>
+                                    <div className="field-group">
+                                        <label htmlFor="apellido">Apellido</label>
+                                        <input id="apellido" name="apellido" value={profile.apellido} onChange={handleChange} placeholder="Tu apellido" />
+                                    </div>
 
-                                <div className="field-group">
-                                    <label htmlFor="email">Email</label>
-                                    <input
-                                        id="email"
-                                        name="email"
-                                        value={profile.email}
-                                        onChange={handleChange}
-                                        placeholder="Correo de contacto"
-                                        disabled
-                                    />
-                                </div>
+                                    <div className="field-group">
+                                        <label htmlFor="fechaNacimiento">Fecha de nacimiento</label>
+                                        <input id="fechaNacimiento" name="fechaNacimiento" type="date" value={profile.fechaNacimiento} onChange={handleChange} />
+                                    </div>
 
-                                <div className="field-group">
-                                    <label htmlFor="telefono">Teléfono</label>
-                                    <input
-                                        id="telefono"
-                                        name="telefono"
-                                        value={profile.telefono}
-                                        onChange={handleChange}
-                                        placeholder="Ej: +54 11 1234 5678"
-                                    />
-                                </div>
-
-                                <div className="field-group">
-                                    <label htmlFor="fechaNacimiento">Fecha de nacimiento</label>
-                                    <input id="fechaNacimiento" name="fechaNacimiento" type="date" value={profile.fechaNacimiento} onChange={handleChange} />
-                                </div>
-
-                                <div className="field-group">
-                                    <label htmlFor="nacionalidad">Nacionalidad</label>
-                                    <input
-                                        id="nacionalidad"
-                                        name="nacionalidad"
-                                        value={profile.nacionalidad}
-                                        onChange={handleChange}
-                                        placeholder="Ej: Argentina"
-                                    />
-                                </div>
-
-                                <div className="field-group full-width">
-                                    <label htmlFor="direccion">Ubicación / dirección</label>
-                                    <input
-                                        id="direccion"
-                                        name="direccion"
-                                        value={profile.direccion}
-                                        onChange={handleChange}
-                                        placeholder="Ciudad, provincia o dirección de referencia"
-                                    />
-                                </div>
-
-                                <div className="field-group full-width visibility-toggle-wrap">
-                                    <label className="visibility-toggle" htmlFor="isPublic">
-                                        <span>
-                                            <strong>Perfil público</strong>
-                                            <small>
-                                                Si lo activas, tu perfil aparecerá en Home y podrá encontrarse desde `/search`.
-                                            </small>
-                                        </span>
+                                    <div className="field-group">
+                                        <label htmlFor="nacionalidad">Nacionalidad</label>
                                         <input
-                                            id="isPublic"
-                                            name="isPublic"
-                                            type="checkbox"
-                                            checked={!!profile.isPublic}
-                                            onChange={(event) => setProfile((current) => ({ ...current, isPublic: event.target.checked }))}
+                                            id="nacionalidad"
+                                            name="nacionalidad"
+                                            value={profile.nacionalidad}
+                                            onChange={handleChange}
+                                            placeholder="Ej: Argentina"
                                         />
-                                    </label>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="profile-section-group">
+                                <h3 className="profile-subgroup-title">Contacto</h3>
+                                <div className="profile-grid profile-grid--compact">
+                                    <div className="field-group">
+                                        <label htmlFor="email">Email</label>
+                                        <input
+                                            id="email"
+                                            name="email"
+                                            value={profile.email}
+                                            onChange={handleChange}
+                                            placeholder="Correo de contacto"
+                                            disabled
+                                        />
+                                    </div>
+
+                                    <div className="field-group">
+                                        <label htmlFor="telefono">Telefono</label>
+                                        <input
+                                            id="telefono"
+                                            name="telefono"
+                                            value={profile.telefono}
+                                            onChange={handleChange}
+                                            placeholder="Ej: +54 11 1234 5678"
+                                        />
+                                    </div>
+
+                                    <div className="field-group full-width">
+                                        <label htmlFor="direccion">Ubicacion / direccion</label>
+                                        <input
+                                            id="direccion"
+                                            name="direccion"
+                                            value={profile.direccion}
+                                            onChange={handleChange}
+                                            placeholder="Ciudad, provincia o direccion de referencia"
+                                        />
+                                    </div>
+
+                                    <div className="field-group full-width visibility-toggle-wrap">
+                                        <label className="visibility-toggle" htmlFor="isPublic">
+                                            <span>
+                                                <strong>Perfil publico</strong>
+                                                <small>
+                                                    Si lo activas, tu perfil aparecera en Home y podra encontrarse desde /search.
+                                                </small>
+                                            </span>
+                                            <input
+                                                id="isPublic"
+                                                name="isPublic"
+                                                type="checkbox"
+                                                checked={!!profile.isPublic}
+                                                onChange={(event) => {
+                                                    setProfile((current) => ({ ...current, isPublic: event.target.checked }));
+                                                    setIsDirty(true);
+                                                }}
+                                            />
+                                        </label>
+                                    </div>
                                 </div>
                             </div>
 
                             <p className="section-note">
                                 El correo se toma de tu cuenta y funciona como dato de referencia para el reclutador.
                             </p>
-                        </ProfileSection>
+                        </ProfileSection>}
 
-                        <ProfileSection
+                        {activeSection === "marca" && <ProfileSection
                             sectionKey="marca"
                             title="Marca profesional y enlaces"
-                            hint="Resumen ejecutivo, links y datos clave de empleabilidad."
+                            hint="Define tu posicionamiento profesional antes de detallar toda la trayectoria."
                             isOpen={openSection === "marca"}
                             onToggle={() => toggleSection("marca")}
                         >
-                            <div className="profile-grid">
-                                <div className="field-group full-width">
-                                    <label htmlFor="resumen">Titular profesional</label>
-                                    <input
-                                        id="resumen"
-                                        name="resumen"
-                                        value={profile.resumen}
-                                        onChange={handleChange}
-                                        placeholder="Ej: Analista de datos con enfoque comercial y automatización"
-                                    />
-                                </div>
+                            <div className="profile-section-group">
+                                <h3 className="profile-subgroup-title">Posicionamiento</h3>
+                                <div className="profile-grid">
+                                    <div className="field-group full-width">
+                                        <label htmlFor="resumen">Titular profesional</label>
+                                        <input
+                                            id="resumen"
+                                            name="resumen"
+                                            value={profile.resumen}
+                                            onChange={handleChange}
+                                            placeholder="Ej: Analista de datos con enfoque comercial y automatizacion"
+                                        />
+                                    </div>
 
-                                <div className="field-group">
-                                    <label htmlFor="puestoActual">Puesto actual o deseado</label>
-                                    <input
-                                        id="puestoActual"
-                                        name="puestoActual"
-                                        value={profile.puestoActual}
-                                        onChange={handleChange}
-                                        placeholder="Ej: Desarrollador Full Stack"
-                                    />
-                                </div>
+                                    <div className="field-group">
+                                        <label htmlFor="puestoActual">Puesto actual o deseado</label>
+                                        <input
+                                            id="puestoActual"
+                                            name="puestoActual"
+                                            value={profile.puestoActual}
+                                            onChange={handleChange}
+                                            placeholder="Ej: Desarrollador Full Stack"
+                                        />
+                                    </div>
 
-                                <div className="field-group">
-                                    <label htmlFor="disponibilidad">Disponibilidad</label>
-                                    <select id="disponibilidad" name="disponibilidad" value={profile.disponibilidad} onChange={handleChange}>
-                                        <option value="">Seleccionar</option>
-                                        <option value="Inmediata">Inmediata</option>
-                                        <option value="15 días">15 días</option>
-                                        <option value="30 días">30 días</option>
-                                        <option value="A convenir">A convenir</option>
-                                    </select>
-                                </div>
-
-                                <div className="field-group">
-                                    <label htmlFor="modalidadPreferida">Modalidad preferida</label>
-                                    <select
-                                        id="modalidadPreferida"
-                                        name="modalidadPreferida"
-                                        value={profile.modalidadPreferida}
-                                        onChange={handleChange}
-                                    >
-                                        <option value="">Seleccionar</option>
-                                        <option value="Remoto">Remoto</option>
-                                        <option value="Híbrido">Híbrido</option>
-                                        <option value="Presencial">Presencial</option>
-                                        <option value="Flexible">Flexible</option>
-                                    </select>
-                                </div>
-
-                                <div className="field-group">
-                                    <label htmlFor="pretensionSalarial">Pretensión salarial</label>
-                                    <input
-                                        id="pretensionSalarial"
-                                        name="pretensionSalarial"
-                                        value={profile.pretensionSalarial}
-                                        onChange={handleChange}
-                                        placeholder="Ej: A convenir"
-                                    />
-                                </div>
-
-                                <div className="field-group">
-                                    <label htmlFor="linkedinUrl">LinkedIn</label>
-                                    <input
-                                        id="linkedinUrl"
-                                        name="linkedinUrl"
-                                        type="url"
-                                        value={profile.linkedinUrl}
-                                        onChange={handleChange}
-                                        placeholder="https://linkedin.com/in/..."
-                                    />
-                                </div>
-
-                                <div className="field-group">
-                                    <label htmlFor="githubUrl">GitHub</label>
-                                    <input
-                                        id="githubUrl"
-                                        name="githubUrl"
-                                        type="url"
-                                        value={profile.githubUrl}
-                                        onChange={handleChange}
-                                        placeholder="https://github.com/..."
-                                    />
-                                </div>
-
-                                <div className="field-group full-width">
-                                    <label htmlFor="portfolioUrl">Portfolio o sitio personal</label>
-                                    <input
-                                        id="portfolioUrl"
-                                        name="portfolioUrl"
-                                        type="url"
-                                        value={profile.portfolioUrl}
-                                        onChange={handleChange}
-                                        placeholder="https://tuportfolio.com"
-                                    />
-                                </div>
-
-                                <div className="field-group full-width">
-                                    <label htmlFor="objetivoProfesional">Objetivo profesional</label>
-                                    <textarea
-                                        id="objetivoProfesional"
-                                        name="objetivoProfesional"
-                                        value={profile.objetivoProfesional}
-                                        onChange={handleChange}
-                                        placeholder="Describe el tipo de oportunidad que buscas y cómo quieres aportar valor."
-                                    />
+                                    <div className="field-group full-width">
+                                        <label htmlFor="objetivoProfesional">Objetivo profesional</label>
+                                        <textarea
+                                            id="objetivoProfesional"
+                                            name="objetivoProfesional"
+                                            value={profile.objetivoProfesional}
+                                            onChange={handleChange}
+                                            placeholder="Describe el tipo de oportunidad que buscas y como quieres aportar valor."
+                                        />
+                                    </div>
                                 </div>
                             </div>
-                        </ProfileSection>
 
-                        <ProfileSection
+                            <div className="profile-section-group">
+                                <h3 className="profile-subgroup-title">Condiciones</h3>
+                                <div className="profile-grid profile-grid--compact">
+                                    <div className="field-group">
+                                        <label htmlFor="disponibilidad">Disponibilidad</label>
+                                        <select id="disponibilidad" name="disponibilidad" value={profile.disponibilidad} onChange={handleChange}>
+                                            <option value="">Seleccionar</option>
+                                            <option value="Inmediata">Inmediata</option>
+                                            <option value="15 dias">15 dias</option>
+                                            <option value="30 dias">30 dias</option>
+                                            <option value="A convenir">A convenir</option>
+                                        </select>
+                                    </div>
+
+                                    <div className="field-group">
+                                        <label htmlFor="modalidadPreferida">Modalidad preferida</label>
+                                        <select
+                                            id="modalidadPreferida"
+                                            name="modalidadPreferida"
+                                            value={profile.modalidadPreferida}
+                                            onChange={handleChange}
+                                        >
+                                            <option value="">Seleccionar</option>
+                                            <option value="Remoto">Remoto</option>
+                                            <option value="Hibrido">Hibrido</option>
+                                            <option value="Presencial">Presencial</option>
+                                            <option value="Flexible">Flexible</option>
+                                        </select>
+                                    </div>
+
+                                    <div className="field-group full-width">
+                                        <label htmlFor="pretensionSalarial">Pretension salarial</label>
+                                        <input
+                                            id="pretensionSalarial"
+                                            name="pretensionSalarial"
+                                            value={profile.pretensionSalarial}
+                                            onChange={handleChange}
+                                            placeholder="Ej: A convenir"
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="profile-section-group">
+                                <h3 className="profile-subgroup-title">Links de validacion</h3>
+                                <div className="profile-grid profile-grid--compact">
+                                    <div className="field-group">
+                                        <label htmlFor="linkedinUrl">LinkedIn</label>
+                                        <input
+                                            id="linkedinUrl"
+                                            name="linkedinUrl"
+                                            type="url"
+                                            value={profile.linkedinUrl}
+                                            onChange={handleChange}
+                                            placeholder="https://linkedin.com/in/..."
+                                        />
+                                    </div>
+
+                                    <div className="field-group">
+                                        <label htmlFor="githubUrl">GitHub</label>
+                                        <input
+                                            id="githubUrl"
+                                            name="githubUrl"
+                                            type="url"
+                                            value={profile.githubUrl}
+                                            onChange={handleChange}
+                                            placeholder="https://github.com/..."
+                                        />
+                                    </div>
+
+                                    <div className="field-group full-width">
+                                        <label htmlFor="portfolioUrl">Portfolio o sitio personal</label>
+                                        <input
+                                            id="portfolioUrl"
+                                            name="portfolioUrl"
+                                            type="url"
+                                            value={profile.portfolioUrl}
+                                            onChange={handleChange}
+                                            placeholder="https://tuportfolio.com"
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+                        </ProfileSection>}
+
+                        {activeSection === "sobreMi" && <ProfileSection
                             sectionKey="sobreMi"
                             title="Sobre mí"
                             hint="Presentación breve, humana y orientada a valor."
@@ -1120,22 +1310,23 @@ export default function ProfilePage() {
                                     placeholder="Cuenta quién eres, qué haces bien y qué te diferencia."
                                 />
                             </div>
-                        </ProfileSection>
+                        </ProfileSection>}
 
-                        {LIST_SECTIONS.map((section) => (
+                        {LIST_SECTIONS.filter((section) => section.field === activeSection).map((section) => (
                             <ProfileListSection
                                 key={section.field}
                                 section={section}
                                 items={profile[section.field]}
                                 isOpen={openSection === section.field}
                                 onToggle={() => toggleSection(section.field)}
+                                onFocusSection={setActiveSection}
                                 onAdd={handleAdd}
                                 onChange={handleItemChange}
                                 onRemove={handleRemove}
                             />
                         ))}
 
-                        <ProfileSection
+                        {activeSection === "familia" && <ProfileSection
                             sectionKey="familia"
                             title="Entorno familiar"
                             hint="Datos complementarios para entrevistas más humanas."
@@ -1181,9 +1372,9 @@ export default function ProfilePage() {
                                     </div>
                                 ))}
                             </div>
-                        </ProfileSection>
+                        </ProfileSection>}
 
-                        <ProfileSection
+                        {activeSection === "respuestas" && <ProfileSection
                             sectionKey="respuestas"
                             title="Preguntas y respuestas"
                             hint="Prepara respuestas frecuentes para entrevistas virtuales."
@@ -1210,19 +1401,41 @@ export default function ProfilePage() {
                                 </div>
                             )}
 
+                            {profile.respuestas.length > 1 && (
+                                <p className="section-note">Edita una respuesta por vez para enfocarte en claridad y tono.</p>
+                            )}
+
                             {profile.respuestas.map((item) => (
-                                <div key={item.id} className="sub-item">
+                                <article key={item.id} className={`sub-item ${expandedRespuestaId === item.id ? "is-expanded" : ""}`}>
                                     <div className="sub-item-header">
-                                        <span
-                                            className={`item-quality ${(item.pregunta.trim() && item.respuesta.trim()) ? "item-quality--ok" : "item-quality--warn"}`}
+                                        <button
+                                            type="button"
+                                            className="sub-item-summary"
+                                            onClick={() => {
+                                                setExpandedRespuestaId((current) => (current === item.id ? null : item.id));
+                                                setActiveSection("respuestas");
+                                            }}
                                         >
-                                            {(item.pregunta.trim() && item.respuesta.trim()) ? "Respuesta lista" : "Completar respuesta"}
-                                        </span>
-                                        <input
-                                            placeholder="Pregunta frecuente"
-                                            value={item.pregunta}
-                                            onChange={(e) => handleItemChange("respuestas", item.id, "pregunta", e.target.value)}
-                                        />
+                                            <span
+                                                className={`item-quality ${(item.pregunta.trim() && item.respuesta.trim()) ? "item-quality--ok" : "item-quality--warn"}`}
+                                            >
+                                                {(item.pregunta.trim() && item.respuesta.trim()) ? "Respuesta lista" : "Completar respuesta"}
+                                            </span>
+                                            <strong className="sub-item-main-title">
+                                                {item.pregunta.trim() || "Nueva pregunta frecuente"}
+                                            </strong>
+                                        </button>
+
+                                        <button
+                                            type="button"
+                                            className="item-action-btn"
+                                            onClick={() => {
+                                                setExpandedRespuestaId((current) => (current === item.id ? null : item.id));
+                                                setActiveSection("respuestas");
+                                            }}
+                                        >
+                                            {expandedRespuestaId === item.id ? "Cerrar" : "Editar"}
+                                        </button>
                                         <button
                                             type="button"
                                             className="item-action-btn item-action-btn--danger"
@@ -1233,20 +1446,46 @@ export default function ProfilePage() {
                                         </button>
                                     </div>
 
-                                    <textarea
-                                        placeholder="Escribe una respuesta clara, concreta y en primera persona, como la dirías en una entrevista."
-                                        value={item.respuesta}
-                                        onChange={(e) => handleItemChange("respuestas", item.id, "respuesta", e.target.value)}
-                                    />
-                                </div>
+                                    {expandedRespuestaId === item.id && (
+                                        <div className="sub-item-editor">
+                                            <div className="field-group">
+                                                <label>Pregunta frecuente</label>
+                                                <input
+                                                    placeholder="Pregunta frecuente"
+                                                    value={item.pregunta}
+                                                    onChange={(e) => handleItemChange("respuestas", item.id, "pregunta", e.target.value)}
+                                                />
+                                            </div>
+
+                                            <div className="field-group">
+                                                <label>Respuesta en primera persona</label>
+                                                <textarea
+                                                    placeholder="Escribe una respuesta clara, concreta y en primera persona, como la dirias en una entrevista."
+                                                    value={item.respuesta}
+                                                    onChange={(e) => handleItemChange("respuestas", item.id, "respuesta", e.target.value)}
+                                                />
+                                            </div>
+                                        </div>
+                                    )}
+                                </article>
                             ))}
+
+                            {profile.respuestas.length > 0 && expandedRespuestaId === null && (
+                                <button
+                                    type="button"
+                                    className="add-btn add-btn--ghost"
+                                    onClick={() => setExpandedRespuestaId(profile.respuestas[0].id)}
+                                >
+                                    Editar primera respuesta
+                                </button>
+                            )}
 
                             <button type="button" className="add-btn" onClick={() => handleAddPregunta("respuestas")}>
                                 + Agregar pregunta y respuesta
                             </button>
-                        </ProfileSection>
+                        </ProfileSection>}
 
-                        <ProfileSection
+                        {activeSection === "faqs-avatar" && <ProfileSection
                             sectionKey="faqs-avatar"
                             title="Respuestas rápidas del avatar (FAQs)"
                             hint="Preguntas que tu avatar responde instantáneamente sin llamar al modelo IA."
@@ -1254,7 +1493,7 @@ export default function ProfilePage() {
                             onToggle={() => toggleSection("faqs-avatar")}
                         >
                             {userId && <ProfileFaqSection candidateId={userId} />}
-                        </ProfileSection>
+                        </ProfileSection>}
 
                         <div className="save-panel">
                             <div>
@@ -1273,7 +1512,8 @@ export default function ProfilePage() {
                     <ProfileSidebar
                         profile={profile}
                         completion={completion}
-                        sections={NAV_SECTIONS}
+                        sections={sidebarSections}
+                        activeSection={activeSection}
                         onJumpToSection={jumpToSection}
                     />
                 </div>

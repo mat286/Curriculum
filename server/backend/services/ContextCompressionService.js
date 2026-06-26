@@ -1,4 +1,5 @@
 import logger from '../utils/logger.js';
+import { toTokenSet } from '../utils/textUtils.js';
 
 /**
  * ContextCompressionService
@@ -25,22 +26,11 @@ export class ContextCompressionService {
      */
     _isRedundant(embeddingText, cvText, threshold = 0.6) {
         if (!embeddingText || !cvText) return false;
-
-        const normalize = (text) =>
-            String(text || '')
-                .toLowerCase()
-                .replace(/[^\w\s]/g, ' ')
-                .split(/\s+/)
-                .filter(Boolean);
-
-        const embeddingWords = new Set(normalize(embeddingText));
-        const cvWords = new Set(normalize(cvText));
-
+        const embeddingWords = toTokenSet(embeddingText);
+        const cvWords = toTokenSet(cvText);
         if (embeddingWords.size === 0 || cvWords.size === 0) return false;
-
         const intersection = [...embeddingWords].filter((w) => cvWords.has(w)).length;
         const overlap = intersection / Math.min(embeddingWords.size, cvWords.size);
-
         return overlap >= threshold;
     }
 
@@ -116,23 +106,23 @@ export class ContextCompressionService {
      * Retorna resumen si hay más exchanges antiguos.
      */
     compressConversationMemory(memory, maxExchanges = 3) {
-        if (!memory || !Array.isArray(memory.history)) {
+        if (!memory || !Array.isArray(memory.messages) || memory.messages.length === 0) {
             return { compressedMemory: memory, truncated: false, truncatedCount: 0 };
         }
 
         const maxMessages = maxExchanges * 2; // user + assistant
-        if (memory.history.length <= maxMessages) {
+        if (memory.messages.length <= maxMessages) {
             return { compressedMemory: memory, truncated: false, truncatedCount: 0 };
         }
 
-        const recentHistory = memory.history.slice(-maxMessages);
-        const truncatedCount = memory.history.length - maxMessages;
+        const recentHistory = memory.messages.slice(-maxMessages);
+        const truncatedCount = memory.messages.length - maxMessages;
 
         const compressedMemory = {
             ...memory,
-            history: recentHistory,
+            messages: recentHistory,
             _truncated: {
-                originalLength: memory.history.length,
+                originalLength: memory.messages.length,
                 recentLength: recentHistory.length,
                 truncatedCount,
             },
@@ -168,16 +158,8 @@ export class ContextCompressionService {
         let semanticChunks = semanticContext;
         let memoryContext = conversationMemory;
 
-        // Paso 1: Comprimir CV
-        if (this.enableCompression && cvContext) {
-            const cvResult = this.summarizeCV(cvContext, question, selectedSections);
-            cvContext = cvResult.compressedProfile;
-            stats.steps.cv_compression = {
-                originalTokens: cvResult.originalTokens,
-                compressedTokens: cvResult.compressedTokens,
-                reductionPercentage: cvResult.reductionPercentage,
-            };
-        }
+        // Paso 1: CV trimming movido a PromptAssembler.trimProfile (límites unificados)
+        // summarizeCV eliminado para evitar double-trim con límites inconsistentes.
 
         // Paso 2: Deduplicar embeddings vs CV
         if (this.enableCompression && semanticChunks.length > 0 && cvContext) {

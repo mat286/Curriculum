@@ -1,19 +1,20 @@
 import express from 'express';
 import metricsAggregator from '../config/metricsAggregator.js';
 import { autenticarUsuario } from '../middlewares/authMiddleware.js';
+import { authenticatedLimiter } from '../middlewares/rateLimiter.js';
 import { getOverview } from '../controllers/metricsController.js';
 import logger from '../utils/logger.js';
 
 const router = express.Router();
 
-router.get('/overview', autenticarUsuario, getOverview);
+router.get('/overview', autenticarUsuario, authenticatedLimiter, getOverview);
 
 /**
  * GET /api/metrics
  * Retorna métricas agregadas en tiempo real
  * Requiere autenticación — expone datos operativos internos
  */
-router.get('/', autenticarUsuario, (req, res) => {
+router.get('/', autenticarUsuario, authenticatedLimiter, (req, res) => {
     try {
         const metrics = metricsAggregator.getMetrics();
         res.json(metrics);
@@ -53,7 +54,7 @@ router.get('/health', (req, res) => {
  * Retorna registros sin procesar (últimos N)
  * Requiere autenticación
  */
-router.get('/raw', autenticarUsuario, (req, res) => {
+router.get('/raw', autenticarUsuario, authenticatedLimiter, (req, res) => {
     try {
         const limit = Math.min(parseInt(req.query.limit || '100'), 500);
         const rawRecords = metricsAggregator.getRawRecords(limit);
@@ -76,7 +77,7 @@ router.get('/raw', autenticarUsuario, (req, res) => {
  * Limpia todas las métricas
  * Requiere autenticación
  */
-router.post('/reset', autenticarUsuario, (req, res) => {
+router.post('/reset', autenticarUsuario, authenticatedLimiter, (req, res) => {
     try {
         // Validar que sea administrador (role: 'recruiter' o similar)
         // Por ahora, cualquier usuario autenticado puede hacer reset

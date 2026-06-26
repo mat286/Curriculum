@@ -23,6 +23,7 @@ validateEnv();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const isProduction = process.env.NODE_ENV === 'production';
 
 // Configurar trust proxy para leer IP real cuando hay proxies (nginx, load balancer)
 // Necesario para que rate limiters usen req.ip correcto
@@ -31,7 +32,18 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 // Middlewares globales
-app.use(helmet());
+app.use(helmet({
+    contentSecurityPolicy: {
+        directives: {
+            defaultSrc: ["'self'"],
+            frameAncestors: ["'none'"],
+            objectSrc: ["'none'"],
+            baseUri: ["'self'"],
+            formAction: ["'self'"],
+            ...(isProduction ? { upgradeInsecureRequests: [] } : {}),
+        },
+    },
+}));
 
 const allowedOrigins = process.env.CORS_ORIGINS
     ? process.env.CORS_ORIGINS.split(',').map(o => o.trim())

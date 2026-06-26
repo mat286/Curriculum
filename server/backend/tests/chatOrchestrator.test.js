@@ -28,7 +28,7 @@ function createOrchestratorForTopK(confidence) {
         classify: vi.fn(() => ({ intent: 'general', confidence })),
     };
     orchestrator.aggregateService = {
-        getPublicCandidateAggregate: vi.fn(async () => ({
+        getAccessibleCandidateAggregate: vi.fn(async () => ({
             candidateName: 'Ana Test',
             profile: { usuario: { nombre: 'Ana' } },
             snapshot: { json: { usuario: { nombre: 'Ana' } }, context: '', updatedAt: null },
@@ -67,31 +67,40 @@ function createOrchestratorForTopK(confidence) {
 }
 
 describe('ChatOrchestrator dynamic top-k policy', () => {
-    it('usa top-k=2 con confidence >= 0.8', async () => {
+    it('propaga requesterId al aggregate service', async () => {
+        const { orchestrator } = createOrchestratorForTopK(0.81);
+
+        await orchestrator.prepareContext({ candidateId: 10, requesterId: 20, message: 'contame experiencia' });
+
+        expect(orchestrator.aggregateService.getAccessibleCandidateAggregate).toHaveBeenCalledTimes(1);
+        expect(orchestrator.aggregateService.getAccessibleCandidateAggregate).toHaveBeenCalledWith(10, 20);
+    });
+
+    it('usa top-k=3 con confidence media-alta (0.8)', async () => {
         const { orchestrator, retrieveSpy } = createOrchestratorForTopK(0.81);
 
         await orchestrator.prepareContext({ candidateId: 10, requesterId: 20, message: 'contame experiencia' });
 
         expect(retrieveSpy).toHaveBeenCalledTimes(1);
-        expect(retrieveSpy.mock.calls[0][0].topK).toBe(2);
+        expect(retrieveSpy.mock.calls[0][0].topK).toBe(3);
     });
 
-    it('usa top-k=3 con confidence entre 0.5 y 0.79', async () => {
+    it('usa top-k=4 con confidence entre 0.5 y 0.79', async () => {
         const { orchestrator, retrieveSpy } = createOrchestratorForTopK(0.65);
 
         await orchestrator.prepareContext({ candidateId: 10, requesterId: 20, message: 'contame educación' });
 
         expect(retrieveSpy).toHaveBeenCalledTimes(1);
-        expect(retrieveSpy.mock.calls[0][0].topK).toBe(3);
+        expect(retrieveSpy.mock.calls[0][0].topK).toBe(4);
     });
 
-    it('usa top-k=4 con confidence < 0.5', async () => {
+    it('usa top-k=5 con confidence < 0.5', async () => {
         const { orchestrator, retrieveSpy } = createOrchestratorForTopK(0.3);
 
         await orchestrator.prepareContext({ candidateId: 10, requesterId: 20, message: 'tema ambiguo' });
 
         expect(retrieveSpy).toHaveBeenCalledTimes(1);
-        expect(retrieveSpy.mock.calls[0][0].topK).toBe(4);
+        expect(retrieveSpy.mock.calls[0][0].topK).toBe(5);
     });
 
     it('aplica override por env cuando está presente', async () => {

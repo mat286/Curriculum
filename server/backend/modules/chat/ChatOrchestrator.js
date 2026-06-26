@@ -12,14 +12,30 @@ import { IntentClassifierService } from './IntentClassifierService.js';
 import { ContextSelectorService } from './ContextSelectorService.js';
 import { FAQSemanticRetriever } from '../faq/FAQSemanticRetriever.js';
 import { DynamicTopKSelector } from '../../services/DynamicTopKSelector.js';
+import logger from '../../utils/logger.js';
+
+function asPositiveInt(rawValue, fallback) {
+    const parsed = parseInt(String(rawValue ?? ''), 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
 
 const DEFAULT_OPTIONS = {
     model: process.env.OLLAMA_MODEL || 'mistral:7b',
     keepAlive: process.env.OLLAMA_KEEP_ALIVE || '30m',
     temperature: 0.2,
-    numPredict: 220,
-    numCtx: 2048,
-    timeout: parseInt(process.env.OLLAMA_TIMEOUT || '120000', 10),
+    numPredict: asPositiveInt(process.env.CANDIDATE_CHAT_NUM_PREDICT, 220),
+    numCtx: asPositiveInt(process.env.CANDIDATE_CHAT_NUM_CTX, 2048),
+    timeout: asPositiveInt(process.env.OLLAMA_TIMEOUT, 120000),
+};
+
+const STREAM_OPTIONS = {
+    ...DEFAULT_OPTIONS,
+    numPredict: asPositiveInt(process.env.CANDIDATE_CHAT_STREAM_NUM_PREDICT, 160),
+    numCtx: Math.min(
+        DEFAULT_OPTIONS.numCtx,
+        asPositiveInt(process.env.CANDIDATE_CHAT_STREAM_NUM_CTX, 1536),
+    ),
+    timeout: asPositiveInt(process.env.CANDIDATE_CHAT_STREAM_TIMEOUT, DEFAULT_OPTIONS.timeout),
 };
 
 function pickOptionalMetric(value) {
@@ -53,6 +69,7 @@ export class ChatOrchestrator {
         this.intentClassifier = new IntentClassifierService();
         this.contextSelector = new ContextSelectorService();
         this.faqRetriever = new FAQSemanticRetriever();
+        this.dynamicTopKSelector = new DynamicTopKSelector();
         this.llm = new ResilientLLMProvider(new DefaultLLMProvider(), {
             maxRetries: 1,
             circuitThreshold: 4,
@@ -64,8 +81,54 @@ export class ChatOrchestrator {
         return `session:${requesterId || 'anon'}:candidate:${candidateId}`;
     }
 
+    persistConversationInBackground({ sessionKey, candidateId, requesterId, userMessage, assistantMessage, requestId }) {
+        const persistStart = Date.now();
+        void Promise.allSettled([
+            this.memory.addTurn({
+                sessionKey,
+                candidateId,
+                requesterId,
+                role: 'user',
+                content: userMessage,
+            }),
+            this.memory.addTurn({
+                sessionKey,
+                candidateId,
+                requesterId,
+                role: 'assistant',
+                content: assistantMessage,
+            }),
+        ]).then((results) => {
+            const rejected = results.filter((result) => result.status === 'rejected');
+            const persistMs = Date.now() - persistStart;
+
+            if (rejected.length > 0) {
+                logger.warn(
+                    {
+                        requestId,
+                        candidateId,
+                        requesterId,
+                        persistMs,
+                        failedWrites: rejected.length,
+                    },
+                    'candidate-chat:async persistence partially failed',
+                );
+                return;
+            }
+
+            logger.debug(
+                {
+                    requestId,
+                    candidateId,
+                    requesterId,
+                    persistMs,
+                },
+                'candidate-chat:async persistence completed',
+            );
+        });
+    }
+
     async prepareContext({ candidateId, message, requesterId, requestId }) {
-        this.dynamicTopKSelector = new DynamicTopKSelector();
         const telemetry = new ChatTelemetry('candidate-chat', { candidateId, requesterId, requestId });
         this.telemetry = telemetry;
         const normalizedQuestion = this.normalizeService.normalize(message);
@@ -74,7 +137,14 @@ export class ChatOrchestrator {
         const intentResult = this.intentClassifier.classify(normalizedQuestion);
         telemetry.mark('intent', { intent: intentResult.intent, confidence: intentResult.confidence });
 
-        const aggregate = await this.aggregateService.getPublicCandidateAggregate(candidateId);
+        // Paralelizar aggregate + faqRetriever: ambos solo necesitan candidateId/question,
+        // no tienen dependencia entre sí.
+        const sessionKey = this.getSessionKey({ requesterId, candidateId });
+        const [aggregate, faqHit] = await Promise.all([
+            this.aggregateService.getAccessibleCandidateAggregate(candidateId, requesterId),
+            this.faqRetriever.findBestMatch({ candidateId, question: normalizedQuestion }),
+        ]);
+
         if (!aggregate.snapshot?.json) {
             const built = await this.snapshotService.upsertSnapshot(candidateId, aggregate.profile);
             aggregate.snapshot = {
@@ -91,7 +161,6 @@ export class ChatOrchestrator {
             return { route: 'l1-greeting', aggregate, greeting, telemetry };
         }
 
-        const faqHit = await this.faqRetriever.findBestMatch({ candidateId, question: normalizedQuestion });
         telemetry.mark('faq', { hit: faqHit.hit, similarity: faqHit.similarity || 0 });
 
         if (faqHit.hit && faqHit.faq?.answer) {
@@ -111,16 +180,16 @@ export class ChatOrchestrator {
             return { route: 'l3-response-cache', aggregate, cachedResponse, cacheKey, telemetry };
         }
 
-        const sessionKey = this.getSessionKey({ requesterId, candidateId });
-        const memory = await this.memory.get(sessionKey);
-        telemetry.mark('memory');
-
-        const selected = this.contextSelector.select(intentResult.intent, intentResult.confidence);
+        const selected = this.contextSelector.select(
+            intentResult.intent,
+            intentResult.confidence,
+            normalizedQuestion,
+        );
         telemetry.mark('selector', { include: selected.include.join(',') });
-// P0-001: Dynamic Top-K Selection
+
+        // P0-001: Dynamic Top-K Selection
         const topKSelection = this.dynamicTopKSelector.selectTopK({
             intentConfidence: intentResult.confidence,
-            semanticSimilarities: [],
             questionLength: normalizedQuestion.length,
             intent: intentResult.intent,
             candidateId,
@@ -133,18 +202,27 @@ export class ChatOrchestrator {
             confidenceScore: topKSelection.confidenceScore,
         });
 
-        const semantic = await this.semantic.retrieve({
-            candidateId,
-            query: normalizedQuestion,
-            includeSections: selected.include,
-            topK,
-            timeoutMs: 500,
-            minSimilarity: parseFloat(process.env.SEMANTIC_MIN_SIMILARITY || '0.68'),
-            profileContext: this.contextSelector.pickFromProfile(
-                aggregate.snapshot?.json || aggregate.profile,
-                selected.include,
-            ),
-        });
+        // Paralelizar memory.get + semantic.retrieve: memory no depende de aggregate.
+        const profileContextForSemantic = this.contextSelector.pickFromProfile(
+            aggregate.snapshot?.json || aggregate.profile,
+            selected.include,
+        );
+        const [memory, semantic] = await Promise.all([
+            this.memory.get(sessionKey),
+            this.semantic.retrieve({
+                candidateId,
+                query: normalizedQuestion,
+                includeSections: selected.include,
+                topK,
+                timeoutMs: 500,
+                minSimilarity: parseFloat(process.env.SEMANTIC_MIN_SIMILARITY || '0.68'),
+                intent: intentResult.intent,
+                intentConfidence: intentResult.confidence,
+                queryType: selected?.retrievalPolicy?.queryType || 'general',
+                profileContext: profileContextForSemantic,
+            }),
+        ]);
+        telemetry.mark('memory');
         telemetry.mark('semantic', {
             reason: semantic.reason,
             semanticMs: semantic.durationMs,
@@ -154,7 +232,6 @@ export class ChatOrchestrator {
             chunksAfterDedupe: semantic.chunkStats?.afterDedupe || semantic.chunks.length,
             searchMethod: semantic.method || 'semantic',
             hybridStats: semantic.hybridStats,
-            rerankingStats: semantic.rerankingStats,
         });
 
         const profileContextRaw = aggregate.snapshot?.json || aggregate.profile;
@@ -221,7 +298,11 @@ export class ChatOrchestrator {
             return { ...prep.cachedResponse, cached: true };
         }
 
-        const answer = await this.llm.generate(prep.prompt, { ...DEFAULT_OPTIONS, numPredict: 300 });
+        const answer = await this.llm.generate(
+            prep.prompt,
+            { ...DEFAULT_OPTIONS, numPredict: 450 },
+            prep.systemInstruction,
+        );
         prep.telemetry.mark('llm');
 
         await this.memory.addTurn({ sessionKey: prep.sessionKey, candidateId, requesterId, role: 'user', content: message });
@@ -237,7 +318,7 @@ export class ChatOrchestrator {
             faqSimilarity: prep.faqHit?.similarity || 0,
         });
 
-        return payload;
+        return { answer, candidateId, routed: 'with_data' };
     }
 
     async askStream({ candidateId, message, requesterId, requestId, onToken }) {
@@ -250,11 +331,7 @@ export class ChatOrchestrator {
                 candidateId,
                 done: true,
                 cached: false,
-                metrics: buildStreamMetrics({
-                    telemetry: prep.telemetry,
-                    routed: 'fast-direct',
-                    cached: false,
-                }),
+                metrics: buildStreamMetrics({ telemetry: prep.telemetry, routed: 'fast-direct', cached: false }),
             };
         }
 
@@ -267,11 +344,7 @@ export class ChatOrchestrator {
                 cached: false,
                 faqHit: true,
                 faqSimilarity: prep.faqHit.similarity,
-                metrics: buildStreamMetrics({
-                    telemetry: prep.telemetry,
-                    routed: 'faq-direct',
-                    cached: false,
-                }),
+                metrics: buildStreamMetrics({ telemetry: prep.telemetry, routed: 'faq-direct', cached: false }),
             };
         }
 
@@ -287,11 +360,7 @@ export class ChatOrchestrator {
                 candidateId,
                 done: true,
                 cached: true,
-                metrics: buildStreamMetrics({
-                    telemetry: prep.telemetry,
-                    routed,
-                    cached: true,
-                }),
+                metrics: buildStreamMetrics({ telemetry: prep.telemetry, routed, cached: true }),
             };
         }
 
@@ -299,22 +368,34 @@ export class ChatOrchestrator {
         let firstToken = true;
         const llmStart = Date.now();
 
-        await this.llm.generateStream(prep.prompt, DEFAULT_OPTIONS, (token) => {
-            if (firstToken) {
-                prep.telemetry.mark('ttfb', { ttfbMs: Date.now() - llmStart });
-                firstToken = false;
-            }
-            fullResponse += token;
-            onToken(token);
-        });
+        await this.llm.generateStream(
+            prep.prompt,
+            STREAM_OPTIONS,
+            (token) => {
+                if (firstToken) {
+                    prep.telemetry.mark('ttfb', { ttfbMs: Date.now() - llmStart });
+                    firstToken = false;
+                }
+                fullResponse += token;
+                onToken(token);
+            },
+            prep.systemInstruction,
+        );
 
         prep.telemetry.mark('llm');
 
-        await this.memory.addTurn({ sessionKey: prep.sessionKey, candidateId, requesterId, role: 'user', content: message });
-        await this.memory.addTurn({ sessionKey: prep.sessionKey, candidateId, requesterId, role: 'assistant', content: fullResponse });
-
         const payload = { answer: fullResponse, candidateId, routed: 'with_data' };
         this.cache.setResponse(prep.cacheKey, payload);
+
+        this.persistConversationInBackground({
+            sessionKey: prep.sessionKey,
+            candidateId,
+            requesterId,
+            userMessage: message,
+            assistantMessage: fullResponse,
+            requestId,
+        });
+
         prep.telemetry.flush({
             cacheHit: false,
             tokenChars: fullResponse.length,
@@ -329,11 +410,7 @@ export class ChatOrchestrator {
             candidateId,
             done: true,
             cached: false,
-            metrics: buildStreamMetrics({
-                telemetry: prep.telemetry,
-                routed: 'with_data',
-                cached: false,
-            }),
+            metrics: buildStreamMetrics({ telemetry: prep.telemetry, routed: 'with_data', cached: false }),
         };
     }
 }

@@ -1,137 +1,49 @@
-import { getUserData } from '../services/dataService.js';
-import { generateResponseFromPrompt, generateResponseStreamFromPrompt } from '../services/responseService.js';
-import { search as semanticSearch } from '../services/embeddingService.js';
-import { PromptAssembler } from '../modules/prompt/PromptAssembler.js';
-import { ValidationError, NotFoundError } from '../middlewares/errorHandler.js';
-import logger from '../utils/logger.js';
-import { withTimeout, createCache } from '../utils/chatHelpers.js';
+/**
+ * chatController.js — Flujo A: chat autenticado del owner con su propio perfil.
+ *
+ * Refactorizado: delega al ChatOrchestrator con candidateId = requesterId = userId.
+ * CandidateAggregateService ya maneja acceso del owner via SQL (u.id = ?).
+ *
+ * Pipeline anterior eliminado — ver git history para la versión legada.
+ */
+import { ValidationError } from '../middlewares/errorHandler.js';
 import { initSSE } from '../modules/chat/StreamResponse.js';
-import { HybridSearchService } from '../services/HybridSearchService.js';
+import { chatOrchestrator } from '../modules/chat/ChatOrchestrator.js';
 import { isRetryableError } from '../utils/retryUtils.js';
 import metricsAggregator from '../config/metricsAggregator.js';
+import logger from '../utils/logger.js';
 
-const hybridSearch = new HybridSearchService();
-const promptAssembler = new PromptAssembler();
-
-export function enrichWithHybrid(query, semanticHits, userData, candidateId, requestId) {
-    if (!userData || semanticHits.length === 0) return semanticHits;
-    try {
-        const result = hybridSearch.search({
-            query,
-            profileContext: userData,
-            semanticResults: semanticHits,
-            candidateId,
-            requestId,
-        });
-        logger.info(
-            { candidateId, requestId, method: result.method, beforeCount: semanticHits.length, afterCount: result.results.length },
-            'retrieval:hybrid applied'
-        );
-        return result.results;
-    } catch (err) {
-        logger.warn({ err, candidateId }, 'Hybrid enrichment falló, usando solo resultados semánticos');
-        return semanticHits;
+function validateQuestion(question) {
+    if (!question || typeof question !== 'string' || question.trim().length === 0) {
+        throw new ValidationError('La pregunta no puede estar vacía');
     }
-}
-
-const QUICK_RESPONSES = [
-    {
-        pattern: /^(hola|holi|hey|buenas|buenos dias|buenos días|buenas tardes|buenas noches)[!.?\s]*$/i,
-        getMessage: (userName) => `¡Hola${userName ? ` ${userName.split(' ')[0]}` : ''}! Estoy listo para ayudarte con tu perfil y tus entrevistas.`,
-    },
-    {
-        pattern: /^(gracias|muchas gracias|genial|perfecto|ok)[!.?\s]*$/i,
-        getMessage: () => '¡Con gusto! Si quieres, puedo ayudarte a practicar respuestas o resumir tu experiencia.',
-    },
-];
-
-const answerCache = createCache(5 * 60 * 1000);
-
-function getCacheKey(userId, question) {
-    return `${userId}:${question.trim().toLowerCase()}`;
-}
-
-function getFastDirectResponse(question, userName) {
-    const entry = QUICK_RESPONSES.find(({ pattern }) => pattern.test(question.trim()));
-    return entry ? entry.getMessage(userName) : null;
+    if (question.trim().length > 2000) {
+        throw new ValidationError('La pregunta no puede superar los 2000 caracteres');
+    }
+    return question.trim();
 }
 
 /**
  * POST /api/chat/ask
- * Endpoint principal del chat con enfoque retrieval-first.
  */
 export async function ask(req, res, next) {
     try {
-        const { question } = req.body;
-
-        if (!question || typeof question !== 'string' || question.trim().length === 0) {
-            throw new ValidationError('La pregunta no puede estar vacía');
-        }
-
-        const trimmedQuestion = question.trim();
-        if (trimmedQuestion.length > 2000) {
-            throw new ValidationError('La pregunta no puede superar los 2000 caracteres');
-        }
+        const trimmedQuestion = validateQuestion(req.body.question);
         const userId = req.user.id;
-        const userName = `${req.user.nombre || ''} ${req.user.apellido || ''}`.trim() || 'Candidato';
 
-        const fastResponse = getFastDirectResponse(trimmedQuestion, userName);
-        if (fastResponse) {
-            return res.json({ answer: fastResponse, userId, routed: 'fast-direct' });
-        }
-
-        const cacheKey = getCacheKey(userId, trimmedQuestion);
-        const cachedPayload = answerCache.get(cacheKey);
-        if (cachedPayload) {
-            return res.json({ ...cachedPayload, cached: true });
-        }
-
-        const [userDataResult, embeddingResult] = await Promise.allSettled([
-            getUserData(userId, []),
-            withTimeout(semanticSearch(trimmedQuestion, userId, 2), 900, []),
-        ]);
-
-        if (userDataResult.status === 'rejected') {
-            throw userDataResult.reason;
-        }
-
-        const userData = userDataResult.value;
-        if (!userData) {
-            throw new NotFoundError('Usuario no encontrado');
-        }
-
-        const semanticHits = embeddingResult.status === 'fulfilled' ? embeddingResult.value : [];
-        if (embeddingResult.status === 'rejected') {
-            logger.debug({ userId }, 'Embeddings no disponibles, continuando sin ellos');
-        }
-
-        const embeddingResults = enrichWithHybrid(trimmedQuestion, semanticHits, userData, userId, null);
-        const promptBuildResult = promptAssembler.build({
-            candidateName: userName,
-            profileContext: userData,
-            semanticContext: embeddingResults,
-            conversationMemory: null,
-            faqHit: null,
-            selectedSections: [],
-            question: trimmedQuestion,
+        const result = await chatOrchestrator.ask({
+            candidateId: userId,
+            message: trimmedQuestion,
+            requesterId: userId,
             requestId: null,
         });
-        const systemInstruction = promptBuildResult?.systemInstruction ?? null;
-        const userPrompt = String(promptBuildResult?.userPrompt ?? promptBuildResult?.prompt ?? '').trim() || trimmedQuestion;
-        const compressionStats = promptBuildResult?.compressionStats ?? null;
 
-        logger.debug({ userId, promptChars: userPrompt.length, compressionStats }, 'chat:prompt built');
-        const answer = await generateResponseFromPrompt(userPrompt, systemInstruction);
-
-        const payload = {
-            answer,
+        res.json({
+            answer: result.answer,
             userId,
-            routed: 'with_data',
-            intent: 'retrieval_direct',
-        };
-
-        answerCache.set(cacheKey, payload);
-        res.json(payload);
+            routed: result.routed,
+            cached: result.cached ?? false,
+        });
     } catch (error) {
         next(error);
     }
@@ -139,31 +51,20 @@ export async function ask(req, res, next) {
 
 /**
  * POST /api/chat/ask/stream
- * Igual que ask() pero transmite la respuesta token a token via SSE.
- * El cliente puede mostrar los tokens a medida que llegan, sin esperar el final.
  *
- * Formato de eventos:
+ * Formato de eventos SSE:
  *   data: {"token":"hola"}\n\n
- *   data: {"token":" mundo"}\n\n
  *   data: {"done":true,"routed":"with_data"}\n\n
  */
 export async function askStream(req, res, next) {
-    const { question } = req.body;
-
-    if (!question || typeof question !== 'string' || question.trim().length === 0) {
-        return next(new ValidationError('La pregunta no puede estar vacía'));
+    let trimmedQuestion;
+    try {
+        trimmedQuestion = validateQuestion(req.body.question);
+    } catch (error) {
+        return next(error);
     }
-
-    const trimmedQuestion = question.trim();
-    if (trimmedQuestion.length > 2000) {
-        return next(new ValidationError('La pregunta no puede superar los 2000 caracteres'));
-    }
-
-    const startMs = Date.now();
-    let firstTokenMs = null;
 
     const userId = req.user.id;
-    const userName = `${req.user.nombre || ''} ${req.user.apellido || ''}`.trim() || 'Candidato';
     const sse = initSSE(res);
 
     let clientGone = false;
@@ -177,94 +78,40 @@ export async function askStream(req, res, next) {
         sse.startHeartbeat();
         sse.sendStatus('thinking');
 
-        const fastResponse = getFastDirectResponse(trimmedQuestion, userName);
-        if (fastResponse) {
-            sse.sendStatus('generating', { source: 'fast-direct' });
-            sse.sendToken(fastResponse);
-            sse.sendStatus('finalizing');
-            sse.finish({ routed: 'fast-direct' });
-            return;
-        }
-
-        sse.sendStatus('retrieving');
-
-        const [userDataResult, embeddingResult] = await Promise.allSettled([
-            getUserData(userId, []),
-            withTimeout(semanticSearch(trimmedQuestion, userId, 2), 900, []),
-        ]);
-
-        if (userDataResult.status === 'rejected') {
-            sse.sendError(userDataResult.reason || 'Error al obtener datos del usuario', isRetryableError(userDataResult.reason));
-            res.end();
-            return;
-        }
-
-        const userData = userDataResult.value;
-        if (!userData) {
-            sse.sendError('Usuario no encontrado', false);
-            res.end();
-            return;
-        }
-
-        const semanticHits = embeddingResult.status === 'fulfilled' ? embeddingResult.value : [];
-        if (embeddingResult.status === 'rejected') {
-            logger.debug({ userId, requestId: sse.requestId }, 'Embeddings no disponibles en stream, continuando sin ellos');
-        }
-
-        const enrichedEmbeddings = enrichWithHybrid(trimmedQuestion, semanticHits, userData, userId, sse.requestId);
-        sse.sendStatus('generating', { embeddings: enrichedEmbeddings.length });
-
-        const streamPromptBuildResult = promptAssembler.build({
-            candidateName: userName,
-            profileContext: userData,
-            semanticContext: enrichedEmbeddings,
-            conversationMemory: null,
-            faqHit: null,
-            selectedSections: [],
-            question: trimmedQuestion,
+        const result = await chatOrchestrator.askStream({
+            candidateId: userId,
+            message: trimmedQuestion,
+            requesterId: userId,
             requestId: sse.requestId,
-        });
-        const streamSysInstruction = streamPromptBuildResult?.systemInstruction ?? null;
-        const streamUserPrompt = String(streamPromptBuildResult?.userPrompt ?? streamPromptBuildResult?.prompt ?? '').trim() || trimmedQuestion;
-        const streamCompressionStats = streamPromptBuildResult?.compressionStats ?? null;
-        logger.debug({ userId, requestId: sse.requestId, promptChars: streamUserPrompt.length, streamCompressionStats }, 'chat:stream prompt built');
-
-        await generateResponseStreamFromPrompt(
-            streamUserPrompt,
-            (token) => {
-                if (!clientGone) {
-                    if (firstTokenMs === null) firstTokenMs = Date.now();
-                    sse.sendToken(token);
-                }
+            onToken: (token) => {
+                if (!clientGone) sse.sendToken(token);
             },
-            streamSysInstruction,
-        );
+        });
 
         if (!clientGone) {
-            const totalMs = Date.now() - startMs;
-            const ttfbMs = firstTokenMs !== null ? firstTokenMs - startMs : undefined;
-
+            const metrics = result.metrics ?? {};
             sse.sendMetrics({
-                routed: 'with_data',
-                intent: 'retrieval_direct',
-                usedEmbeddings: enrichedEmbeddings.length,
-                ttfbMs,
-                totalMs,
+                routed: result.routed,
+                intent: result.intent,
+                usedEmbeddings: metrics.chunkCount,
+                ttfbMs: metrics.ttfbMs,
+                totalMs: metrics.totalMs,
             });
             sse.sendStatus('finalizing');
-            sse.finish({ routed: 'with_data' });
+            sse.finish({ routed: result.routed });
 
             metricsAggregator.recordTelemetry({
                 scope: 'chat:authenticated:stream',
-                totalMs,
-                ttftMs: ttfbMs,
+                totalMs: metrics.totalMs,
+                ttftMs: metrics.ttfbMs,
                 route: 'chat/ask/stream',
-                intent: 'retrieval_direct',
-                promptChars: streamUserPrompt.length,
+                intent: result.intent,
+                promptChars: metrics.promptChars,
             });
         }
     } catch (error) {
         if (clientGone) return;
+        logger.error({ err: error, userId }, 'chat:authenticated:stream error');
         if (res.headersSent) {
             sse.sendError('Error interno al procesar el stream', isRetryableError(error));
             res.end();

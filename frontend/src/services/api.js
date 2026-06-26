@@ -219,6 +219,67 @@ export const onboarding = {
 };
 
 // Servicio de chat (propio del usuario)
+/**
+ * Shared SSE stream reader used by chatService and candidateChatService.
+ * Handles event: lines, abort signals, token/done/error events.
+ */
+async function readSSEStream(reader, { onToken, onError, onDone, onEvent, signal } = {}) {
+  const decoder = new TextDecoder();
+  let buffer = '';
+  try {
+    while (true) {
+      if (signal?.aborted) {
+        const err = new Error('Solicitud cancelada por el usuario');
+        err.name = 'AbortError';
+        onError?.(err);
+        return;
+      }
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop() ?? '';
+
+      for (const part of parts) {
+        const line = part.trim();
+        if (!line) continue;
+
+        const sseLines = line.split('\n');
+        const eventLine = sseLines.find((e) => e.startsWith('event:'));
+        const eventName = eventLine ? eventLine.slice(6).trim() : '';
+        const dataLines = sseLines.filter((e) => e.startsWith('data:'));
+        if (dataLines.length === 0) continue;
+
+        const raw = dataLines.map((e) => e.slice(5).trim()).join('\n').trim();
+        try {
+          const parsed = JSON.parse(raw);
+          if (eventName && parsed && typeof parsed === 'object' && !parsed.eventType) {
+            parsed.eventType = eventName;
+          }
+          onEvent?.(parsed);
+          if (parsed.error) { onError?.(new Error(parsed.error)); return; }
+          if (parsed.done)  { onDone?.(); return; }
+          if (parsed.token != null) onToken?.(parsed.token);
+        } catch { /* ignorar líneas no-JSON */ }
+      }
+    }
+  } catch (readErr) {
+    if (readErr?.name === 'AbortError') {
+      const err = new Error('Solicitud cancelada por el usuario');
+      err.name = 'AbortError';
+      onError?.(err);
+      return;
+    }
+    onError?.(new Error('Se interrumpió la conexión con el servidor'));
+    return;
+  } finally {
+    reader.releaseLock();
+  }
+  onDone?.();
+}
+
+
 export const chatService = {
   askQuestion: async (question, userId) => {
     const response = await api.post('/api/chat/ask', {
@@ -272,40 +333,7 @@ export const chatService = {
       return;
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        // Los eventos SSE están separados por \n\n
-        const parts = buffer.split('\n\n');
-        buffer = parts.pop() ?? '';
-
-        for (const part of parts) {
-          const line = part.trim();
-          if (!line.startsWith('data:')) continue;
-          const raw = line.slice(5).trim();
-          try {
-            const parsed = JSON.parse(raw);
-            if (parsed.error) { onError?.(new Error(parsed.error)); return; }
-            if (parsed.done) { onDone?.(); return; }
-            if (parsed.token != null) onToken?.(parsed.token);
-          } catch { /* ignorar líneas no-JSON */ }
-        }
-      }
-    } catch (readErr) {
-      onError?.(new Error('Se interrumpió la conexión con el servidor'));
-      return;
-    } finally {
-      reader.releaseLock();
-    }
-
-    onDone?.();
+    await readSSEStream(response.body.getReader(), { onToken, onError, onDone });
   },
 };
 
@@ -358,57 +386,7 @@ export const candidateChatService = {
       return;
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const parts = buffer.split('\n\n');
-        buffer = parts.pop() ?? '';
-
-        for (const part of parts) {
-          const line = part.trim();
-          if (!line) continue;
-
-          const sseLines = line.split('\n');
-          const eventLine = sseLines.find((entry) => entry.startsWith('event:'));
-          const eventName = eventLine ? eventLine.slice(6).trim() : '';
-          const dataLines = sseLines.filter((entry) => entry.startsWith('data:'));
-          if (dataLines.length === 0) continue;
-
-          const raw = dataLines.map((entry) => entry.slice(5).trim()).join('\n').trim();
-          try {
-            const parsed = JSON.parse(raw);
-            if (eventName && parsed && typeof parsed === 'object' && !parsed.eventType) {
-              parsed.eventType = eventName;
-            }
-
-            onEvent?.(parsed);
-            if (parsed.error) { onError?.(new Error(parsed.error)); return; }
-            if (parsed.done) { onDone?.(); return; }
-            if (parsed.token != null) onToken?.(parsed.token);
-          } catch { /* ignorar líneas no-JSON */ }
-        }
-      }
-    } catch (readErr) {
-      if (readErr?.name === 'AbortError') {
-        const abortErr = new Error('Solicitud cancelada por el usuario');
-        abortErr.name = 'AbortError';
-        onError?.(abortErr);
-        return;
-      }
-      onError?.(new Error('Se interrumpió la conexión con el servidor'));
-      return;
-    } finally {
-      reader.releaseLock();
-    }
-
-    onDone?.();
+    await readSSEStream(response.body.getReader(), { onToken, onError, onDone, onEvent, signal });
   },
 };
 

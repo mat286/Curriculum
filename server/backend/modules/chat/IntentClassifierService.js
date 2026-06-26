@@ -1,9 +1,9 @@
 const RULES = [
+    { intent: 'technologies', confidence: 0.92, re: /(tecnologia|framework|libreria|node\.js|react|python|java(?!script)|sql|aws|docker|kubernetes)/i },
     { intent: 'work_experience', confidence: 0.92, re: /(experiencia|trabaj|empresa|rol|puesto|career|trayectoria)/i },
-    { intent: 'education', confidence: 0.92, re: /(educacion|estudio|universidad|instituto|titulo|carrera|formacion)/i },
+    { intent: 'education', confidence: 0.92, re: /(educacion|estudi|universidad|instituto|titulo|carrera|formacion)/i },
     { intent: 'skills', confidence: 0.9, re: /(habilidad|skill|competencia|stack|fortaleza)/i },
     { intent: 'projects', confidence: 0.9, re: /(proyecto|portfolio|portafolio|caso|implement)/i },
-    { intent: 'technologies', confidence: 0.92, re: /(tecnologia|framework|libreria|node|react|python|java|sql|aws|docker|kubernetes)/i },
     { intent: 'languages', confidence: 0.9, re: /(idioma|ingles|ingles|espanol|español|frances|portugues|nivel de idioma)/i },
     { intent: 'contact', confidence: 0.94, re: /(contacto|email|correo|telefono|tel|llamar|whatsapp|ubicacion|direccion)/i },
     { intent: 'social', confidence: 0.9, re: /(linkedin|github|portfolio|red social|sitio web)/i },

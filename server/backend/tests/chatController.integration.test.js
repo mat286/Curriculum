@@ -1,40 +1,27 @@
+/**
+ * chatController.integration.test.js
+ *
+ * Actualizado en refactor 2026-06: chatController ahora delega al chatOrchestrator.
+ * Este test mockea chatOrchestrator directamente en lugar del pipeline anterior
+ * (dataService + responseService + embeddingService + HybridSearchService).
+ */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-    classify: vi.fn(),
-    getUserData: vi.fn(),
-    generateResponse: vi.fn(),
-    generateResponseStream: vi.fn(),
-    semanticSearch: vi.fn(),
+    orchestratorAsk: vi.fn(),
+    orchestratorAskStream: vi.fn(),
     initSSE: vi.fn(),
-    hybridSearch: vi.fn(),
 }));
 
-vi.mock('../services/routerService.js', () => ({
-    classify: mocks.classify,
-}));
-
-vi.mock('../services/dataService.js', () => ({
-    getUserData: mocks.getUserData,
-}));
-
-vi.mock('../services/responseService.js', () => ({
-    generateResponse: mocks.generateResponse,
-    generateResponseStream: mocks.generateResponseStream,
-}));
-
-vi.mock('../services/embeddingService.js', () => ({
-    search: mocks.semanticSearch,
+vi.mock('../modules/chat/ChatOrchestrator.js', () => ({
+    chatOrchestrator: {
+        ask: mocks.orchestratorAsk,
+        askStream: mocks.orchestratorAskStream,
+    },
 }));
 
 vi.mock('../modules/chat/StreamResponse.js', () => ({
     initSSE: mocks.initSSE,
-}));
-
-vi.mock('../services/HybridSearchService.js', () => ({
-    HybridSearchService: vi.fn().mockImplementation(() => ({
-        search: mocks.hybridSearch,
-    })),
 }));
 
 import { ask, askStream } from '../controllers/chatController.js';
@@ -72,81 +59,79 @@ function createSSE() {
 describe('chatController integration', () => {
     beforeEach(() => {
         vi.clearAllMocks();
-
-        mocks.classify.mockResolvedValue({
-            intent: 'cv_experience',
-            needs_db: true,
-            fields_required: ['experiencia_laboral'],
-        });
-        mocks.getUserData.mockResolvedValue({
-            usuario: { id: 11, nombre: 'Ada', apellido: 'Lovelace' },
-            experiencia_laboral: [{ puesto: 'Ingeniera', empresa: 'Analytical Engines' }],
-        });
-        mocks.semanticSearch.mockResolvedValue(['sem-1', 'sem-2']);
-        mocks.hybridSearch.mockReturnValue({
-            results: ['hyb-1'],
-            method: 'hybrid',
-        });
-        mocks.generateResponse.mockResolvedValue('respuesta final');
-        mocks.generateResponseStream.mockImplementation(async (_userName, _question, _userData, _embeddings, onToken) => {
-            onToken('hola');
-            onToken(' mundo');
-        });
     });
 
-    it('ask ejecuta flujo completo y responde payload with_data', async () => {
+    it('ask delega al chatOrchestrator con candidateId=requesterId=userId', async () => {
+        mocks.orchestratorAsk.mockResolvedValue({
+            answer: 'respuesta final',
+            routed: 'with_data',
+            cached: false,
+        });
         const req = createReq();
         const res = createRes();
         const next = vi.fn();
 
         await ask(req, res, next);
 
-        expect(mocks.classify).toHaveBeenCalledWith('Cuéntame de tu experiencia', 'Ada Lovelace');
-        expect(mocks.getUserData).toHaveBeenCalledWith(11, ['experiencia_laboral']);
-        expect(mocks.semanticSearch).toHaveBeenCalledWith('Cuéntame de tu experiencia', 11, 2);
-        expect(mocks.generateResponse).toHaveBeenCalledWith(
-            'Ada Lovelace',
-            'Cuéntame de tu experiencia',
-            expect.any(Object),
-            ['hyb-1'],
+        expect(mocks.orchestratorAsk).toHaveBeenCalledWith(
+            expect.objectContaining({
+                candidateId: 11,
+                requesterId: 11,
+                message: 'Cuéntame de tu experiencia',
+            }),
         );
         expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
             answer: 'respuesta final',
             userId: 11,
             routed: 'with_data',
-            intent: 'cv_experience',
         }));
         expect(next).not.toHaveBeenCalled();
     });
 
-    it('askStream ejecuta flujo SSE end-to-end y finaliza stream', async () => {
+    it('ask retorna error via next() si el orchestrator falla', async () => {
+        mocks.orchestratorAsk.mockRejectedValue(new Error('LLM timeout'));
         const req = createReq();
         const res = createRes();
         const next = vi.fn();
-        const sse = createSSE();
 
+        await ask(req, res, next);
+
+        expect(next).toHaveBeenCalledWith(expect.any(Error));
+        expect(res.json).not.toHaveBeenCalled();
+    });
+
+    it('ask lanza ValidationError para pregunta vacía', async () => {
+        const req = createReq({ question: '' });
+        const res = createRes();
+        const next = vi.fn();
+
+        await ask(req, res, next);
+
+        expect(next).toHaveBeenCalledWith(expect.objectContaining({
+            message: expect.stringMatching(/vacía/),
+        }));
+        expect(mocks.orchestratorAsk).not.toHaveBeenCalled();
+    });
+
+    it('askStream delega al orchestrator y transmite tokens via SSE', async () => {
+        const sse = createSSE();
         mocks.initSSE.mockReturnValue(sse);
+        mocks.orchestratorAskStream.mockImplementation(async ({ onToken }) => {
+            onToken('hola');
+            onToken(' mundo');
+            return { routed: 'with_data', metrics: { ttfbMs: 100, totalMs: 500 } };
+        });
+
+        const req = createReq();
+        const res = createRes();
+        const next = vi.fn();
 
         await askStream(req, res, next);
 
-        expect(mocks.initSSE).toHaveBeenCalledWith(res);
         expect(sse.sendAck).toHaveBeenCalled();
         expect(sse.startHeartbeat).toHaveBeenCalled();
-        expect(sse.sendStatus).toHaveBeenCalledWith('thinking');
-        expect(mocks.generateResponseStream).toHaveBeenCalledWith(
-            'Ada Lovelace',
-            'Cuéntame de tu experiencia',
-            expect.any(Object),
-            ['hyb-1'],
-            expect.any(Function),
-        );
         expect(sse.sendToken).toHaveBeenCalledWith('hola');
         expect(sse.sendToken).toHaveBeenCalledWith(' mundo');
-        expect(sse.sendMetrics).toHaveBeenCalledWith(expect.objectContaining({
-            routed: 'with_data',
-            intent: 'cv_experience',
-            usedEmbeddings: 1,
-        }));
         expect(sse.finish).toHaveBeenCalledWith({ routed: 'with_data' });
         expect(next).not.toHaveBeenCalled();
     });

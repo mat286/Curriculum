@@ -4,43 +4,8 @@ import CVModal from "../components/CVModal";
 import { useAuth } from "../context/AuthContext";
 import { chatService, userService } from "../services/api";
 import { ERROR_MESSAGES } from "../utils/constants";
-import { toText, toBoolean, normalizeProfileItems as normalizeItems } from "../utils/profileNormalizers";
+import { normalizeOwnerProfile as normalizeProfileForChat } from "../utils/profileNormalizers";
 import "./Chat.css";
-
-const normalizeProfileForChat = (data = {}, fallbackUser = {}) => {
-  const about = Array.isArray(data.sobre_mi) ? data.sobre_mi[0] || {} : data.sobre_mi || {};
-  const fullName =
-    [data.usuario?.nombre || fallbackUser?.nombre, data.usuario?.apellido || fallbackUser?.apellido]
-      .filter(Boolean)
-      .join(" ")
-      .trim() ||
-    fallbackUser?.email?.split("@")[0] ||
-    "Perfil profesional";
-
-  return {
-    name: fullName,
-    headline: toText(data.usuario?.resumen || data.usuario?.puesto_actual || fallbackUser?.puesto || "CV conversacional activo"),
-    summary: toText(
-      about.descripcion ||
-        data.usuario?.objetivo_profesional ||
-        data.usuario?.resumen ||
-        fallbackUser?.resumen ||
-        "Completa tu perfil para que la IA entregue respuestas más ricas y útiles."
-    ),
-    location: toText(data.usuario?.direccion || fallbackUser?.direccion),
-    availability: toText(data.usuario?.disponibilidad),
-    preferredMode: toText(data.usuario?.modalidad_preferida),
-    salary: toText(data.usuario?.pretension_salarial),
-    linkedinUrl: toText(data.usuario?.linkedin_url),
-    githubUrl: toText(data.usuario?.github_url),
-    portfolioUrl: toText(data.usuario?.portfolio_url),
-    experiences: normalizeItems(data.experiencia_laboral),
-    projects: normalizeItems(data.proyectos),
-    skills: normalizeItems(data.habilidades),
-    studies: normalizeItems(data.educacion),
-    languages: normalizeItems(data.idiomas),
-  };
-};
 
 const getChatHistoryKey = (userId) => (userId ? `${CHAT_HISTORY_STORAGE_PREFIX}:${userId}` : null);
 const getChatDraftKey = (userId) => (userId ? `${CHAT_DRAFT_STORAGE_PREFIX}:${userId}` : null);

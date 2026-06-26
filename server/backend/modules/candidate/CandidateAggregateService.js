@@ -13,6 +13,10 @@ function parseMaybeJson(value, fallback) {
 
 export class CandidateAggregateService {
     async getPublicCandidateAggregate(candidateId) {
+        return this.getAccessibleCandidateAggregate(candidateId, null);
+    }
+
+    async getAccessibleCandidateAggregate(candidateId, requesterId = null) {
         const sql = `
             SELECT
                 u.id,
@@ -118,11 +122,12 @@ export class CandidateAggregateService {
             FROM usuarios u
             LEFT JOIN sobre_mi sm ON sm.user_id = u.id
             LEFT JOIN candidate_context_snapshot snap ON snap.user_id = u.id
-            WHERE u.id = ? AND u.is_public = 1
+            WHERE u.id = ?
+              AND (u.is_public = 1 OR (? IS NOT NULL AND u.id = ?))
             LIMIT 1
         `;
 
-        const [rows] = await pool.query(sql, [candidateId]);
+        const [rows] = await pool.query(sql, [candidateId, requesterId, requesterId]);
         if (rows.length === 0) {
             throw new NotFoundError('Candidato no encontrado o no disponible');
         }

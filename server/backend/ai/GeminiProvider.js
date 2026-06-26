@@ -42,7 +42,7 @@ export class GeminiProvider extends AIProvider {
     activateQuotaCooldown(durationMs = QUOTA_COOLDOWN_MS) {
         this._quotaCooldownUntil = Date.now() + durationMs;
         const minutes = Math.round(durationMs / 60000);
-        logger.warn(`[Gemini] Cuota excedida (429). Cooldown activo por ${minutes} minutos. Usando Ollama como fallback.`);
+        logger.warn(`[Gemini] Cuota excedida (429). Cooldown activo por ${minutes} minutos.`);
     }
 
     /**
@@ -111,7 +111,7 @@ export class GeminiProvider extends AIProvider {
                 throw quotaErr;
             }
             if (this.isNetworkError(error)) {
-                logger.warn({ err: error.message }, '[Gemini] Error de red — activando fallback a Ollama');
+                logger.warn({ err: error.message }, '[Gemini] Error de red.');
                 const netErr = new LLMError(`[Gemini network] ${error.message}`);
                 netErr.isNetworkError = true;
                 throw netErr;
@@ -160,7 +160,7 @@ export class GeminiProvider extends AIProvider {
                 throw quotaErr;
             }
             if (this.isNetworkError(error)) {
-                logger.warn({ err: error.message }, '[Gemini] Error de red en generateJSON — activando fallback');
+                logger.warn({ err: error.message }, '[Gemini] Error de red en generateJSON.');
                 const netErr = new LLMError(`[Gemini network] ${error.message}`);
                 netErr.isNetworkError = true;
                 throw netErr;
@@ -218,7 +218,7 @@ export class GeminiProvider extends AIProvider {
                 throw quotaErr;
             }
             if (this.isNetworkError(error)) {
-                logger.warn({ err: error.message }, '[Gemini] Error de red en streaming — activando fallback a Ollama');
+                logger.warn({ err: error.message }, '[Gemini] Error de red en streaming.');
                 const netErr = new LLMError(`[Gemini network] ${error.message}`);
                 netErr.isNetworkError = true;
                 throw netErr;

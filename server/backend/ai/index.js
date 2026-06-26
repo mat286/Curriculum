@@ -3,122 +3,107 @@
  *
  * Controla qué implementación de IA se usa en toda la aplicación.
  * Cambiá AI_PROVIDER en el .env para alternar:
- *   AI_PROVIDER=gemini   → GeminiProvider con fallback a Ollama en 429  (por defecto)
- *   AI_PROVIDER=ollama   → OllamaProvider directo
+ *   AI_PROVIDER=gemini  → GeminiProvider con 1 reintento automático (por defecto)
+ *   AI_PROVIDER=ollama  → OllamaProvider directo (desarrollo sin internet)
+ *
+ * IMPORTANTE: Ollama se usa EXCLUSIVAMENTE para embeddings (nomic-embed-text).
+ * No se carga ningún modelo LLM en Ollama. Si Gemini falla tras el reintento,
+ * se devuelve un error claro al usuario.
  *
  * NOTA: Los embeddings (búsqueda semántica) SIEMPRE usan Ollama,
  * independientemente de este proveedor. Ver embeddingService.js.
  */
 import { GeminiProvider } from './GeminiProvider.js';
 import { OllamaProvider } from './OllamaProvider.js';
+import { LLMError } from '../middlewares/errorHandler.js';
 import logger from '../utils/logger.js';
-import {
-    OLLAMA_FALLBACK_TIMEOUT,
-    OLLAMA_FALLBACK_NUM_CTX,
-    OLLAMA_KEEP_ALIVE,
-} from '../config/ollama.js';
 
 const AI_PROVIDER = (process.env.AI_PROVIDER || 'gemini').toLowerCase().trim();
+const GEMINI_RETRY_DELAY_MS = parseInt(process.env.GEMINI_RETRY_DELAY_MS || '1500', 10);
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Intenta llamar a fn(). Si falla con error recuperable (timeout / red),
+ * espera GEMINI_RETRY_DELAY_MS y lo intenta una vez más.
+ * Si falla de nuevo — o el error es de cuota (429) — lanza error limpio.
+ */
+async function withGeminiRetry(fn, context = '') {
+    try {
+        return await fn();
+    } catch (firstErr) {
+        // 429 / cuota: no tiene sentido reintentar inmediatamente
+        if (firstErr.isQuotaError) {
+            logger.warn(`[Gemini${context}] Cuota excedida (429). Sin reintento.`);
+            throw new LLMError('El servicio de IA está temporalmente saturado. Intentalo en unos minutos.');
+        }
+
+        // Timeout o red: reintentamos una vez
+        const isRetryable = firstErr.isNetworkError || firstErr.message?.includes('timeout');
+        if (!isRetryable) throw firstErr;
+
+        logger.warn(`[Gemini${context}] Primer intento falló (${firstErr.message}). Reintentando en ${GEMINI_RETRY_DELAY_MS}ms…`);
+        await sleep(GEMINI_RETRY_DELAY_MS);
+
+        try {
+            return await fn();
+        } catch (secondErr) {
+            logger.warn(`[Gemini${context}] Segundo intento falló: ${secondErr.message}`);
+            throw new LLMError('No se pudo obtener respuesta del servicio de IA. Verificá tu conexión e intentalo de nuevo.');
+        }
+    }
+}
 
 let provider;
-
-function buildFallbackOptions(options = {}, mode = 'text') {
-    const safeOptions = { ...options };
-
-    // En fallback priorizamos robustez del primer token durante cold start.
-    safeOptions.timeout = Math.max(options.timeout ?? 0, OLLAMA_FALLBACK_TIMEOUT);
-    safeOptions.numCtx = Math.min(options.numCtx ?? OLLAMA_FALLBACK_NUM_CTX, OLLAMA_FALLBACK_NUM_CTX);
-    safeOptions.keepAlive = options.keepAlive || OLLAMA_KEEP_ALIVE;
-    safeOptions.retryAttempts = Math.max(options.retryAttempts ?? 1, 1);
-
-    if (mode === 'json') {
-        safeOptions.numPredict = Math.min(options.numPredict ?? 120, 120);
-        safeOptions.temperature = options.temperature ?? 0;
-    }
-
-    if (mode === 'stream') {
-        safeOptions.numPredict = Math.min(options.numPredict ?? 220, 220);
-    }
-
-    return safeOptions;
-}
 
 if (AI_PROVIDER === 'ollama') {
     provider = new OllamaProvider();
     logger.info('Proveedor IA: Ollama (local)');
 } else {
-    // Por defecto: Gemini con fallback automático a Ollama si hay 429 / cuota excedida
     const gemini = new GeminiProvider();
-    const ollama = new OllamaProvider();
 
     provider = {
         async generate(prompt, options, systemInstruction) {
             if (gemini.isInQuotaCooldown()) {
-                logger.warn('[Gemini] En cooldown por 429. Usando Ollama para esta petición.');
-                // Ollama no soporta systemInstruction: concatenar al inicio del prompt
-                const fullPrompt = systemInstruction ? `${systemInstruction}\n\n${prompt}` : prompt;
-                return ollama.generate(fullPrompt, buildFallbackOptions(options, 'text'));
+                throw new LLMError('El servicio de IA está temporalmente saturado. Intentalo en unos minutos.');
             }
-            try {
-                return await gemini.generate(prompt, options, systemInstruction);
-            } catch (err) {
-                if (err.isQuotaError || err.isNetworkError) {
-                    logger.warn('[Gemini→Ollama] Fallback activado por cuota excedida o error de red.');
-                    const fullPrompt = systemInstruction ? `${systemInstruction}\n\n${prompt}` : prompt;
-                    return ollama.generate(fullPrompt, buildFallbackOptions(options, 'text'));
-                }
-                throw err;
-            }
+            return withGeminiRetry(
+                () => gemini.generate(prompt, options, systemInstruction),
+                ' generate',
+            );
         },
 
         async generateJSON(prompt, fallback, options) {
             if (gemini.isInQuotaCooldown()) {
-                logger.warn('[Gemini] En cooldown por 429. Usando Ollama para esta petición (JSON).');
-                return ollama.generateJSON(prompt, fallback, buildFallbackOptions(options, 'json'));
+                return fallback;
             }
             try {
-                return await gemini.generateJSON(prompt, fallback, options);
-            } catch (err) {
-                if (err.isQuotaError || err.isNetworkError) {
-                    logger.warn('[Gemini→Ollama] Fallback activado por cuota excedida o error de red (JSON).');
-                    return ollama.generateJSON(prompt, fallback, buildFallbackOptions(options, 'json'));
-                }
-                throw err;
+                return await withGeminiRetry(
+                    () => gemini.generateJSON(prompt, fallback, options),
+                    ' generateJSON',
+                );
+            } catch {
+                // generateJSON es no-crítico: devolver fallback en lugar de explotar
+                return fallback;
             }
         },
 
         async generateStream(prompt, options, onChunk, systemInstruction) {
             if (gemini.isInQuotaCooldown()) {
-                logger.warn('[Gemini] En cooldown por 429. Usando Ollama para streaming.');
-                const fullPrompt = systemInstruction ? `${systemInstruction}\n\n${prompt}` : prompt;
-                return ollama.generateStream(fullPrompt, buildFallbackOptions(options, 'stream'), onChunk);
+                throw new LLMError('El servicio de IA está temporalmente saturado. Intentalo en unos minutos.');
             }
-            try {
-                return await gemini.generateStream(prompt, options, onChunk, systemInstruction);
-            } catch (err) {
-                if (err.isQuotaError || err.isNetworkError) {
-                    logger.warn('[Gemini→Ollama] Fallback streaming activado por cuota excedida o error de red.');
-                    const fullPrompt = systemInstruction ? `${systemInstruction}\n\n${prompt}` : prompt;
-                    return ollama.generateStream(fullPrompt, buildFallbackOptions(options, 'stream'), onChunk);
-                }
-                throw err;
-            }
+            return withGeminiRetry(
+                () => gemini.generateStream(prompt, options, onChunk, systemInstruction),
+                ' stream',
+            );
         },
 
-        async warmupModel(model) {
-            const results = await Promise.allSettled([
-                gemini.warmupModel(model),
-                ollama.warmupModel(model),
-            ]);
-
-            const rejected = results.find(r => r.status === 'rejected');
-            if (rejected) {
-                logger.warn({ err: rejected.reason?.message || rejected.reason }, 'Warmup parcial de proveedores IA');
-            }
+        async warmupModel(_model) {
+            return gemini.warmupModel(_model);
         },
     };
 
-    logger.info(`Proveedor IA: Gemini (${process.env.GEMINI_MODEL || 'gemini-2.0-flash'}) + fallback Ollama`);
+    logger.info(`Proveedor IA: Gemini (${process.env.GEMINI_MODEL || 'gemini-2.0-flash'}) — sin fallback Ollama LLM`);
 }
 
 export default provider;

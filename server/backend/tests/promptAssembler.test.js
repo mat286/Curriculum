@@ -71,14 +71,35 @@ describe('PromptAssembler', () => {
 
         const prompt = result.prompt || result;
 
-        expect(prompt).toContain('### ROL Y REGLAS');
-        expect(prompt).toContain('### MEMORIA CONVERSACIONAL');
+        expect(prompt).toContain('### HECHOS VERIFICABLES - PERFIL');
+        expect(prompt).toContain('### HECHOS VERIFICABLES - MEMORIA');
+        expect(prompt).toContain('### HECHOS VERIFICABLES - FAQ');
+        expect(prompt).toContain('### HECHOS VERIFICABLES - CONTEXTO SEMANTICO');
         expect(prompt).toContain('### SECCIONES PRIORIZADAS');
-        expect(prompt).toContain('### FAQ RELEVANTE');
-        expect(prompt).toContain('### PERFIL DEL CANDIDATO');
-        expect(prompt).toContain('### CONTEXTO SEMANTICO');
-        expect(prompt).toContain('### PREGUNTA');
-        expect(prompt).toContain('### FORMATO DE RESPUESTA');
+        expect(prompt).toContain('### PREGUNTA DEL RECRUITER');
+        expect(prompt).toContain('### INSTRUCCIONES DE RESPUESTA');
+        expect(prompt).toContain('[PERFIL:usuario]');
+        expect(prompt).toContain('[SEMANTICO:1]');
+        expect(prompt).toContain('[FAQ:pregunta]');
+    });
+
+    it('refuerza politicas de fidelidad y estilo en systemInstruction', () => {
+        const result = assembler.build({
+            candidateName: 'Ana QA',
+            profileContext: { usuario: { nombre: 'Ana' } },
+            semanticContext: ['Experiencia en Node.js'],
+            conversationMemory: null,
+            faqHit: null,
+            selectedSections: ['usuario'],
+            question: 'Contame tu experiencia',
+        });
+
+        expect(result.systemInstruction).toContain('Responde SIEMPRE en primera persona del candidato');
+        expect(result.systemInstruction).toContain('REGLA ORO ANTI-HALLUCINATION');
+        expect(result.systemInstruction).toContain('Usa UNICAMENTE hechos verificables del contexto recibido');
+        expect(result.systemInstruction).toContain('Frase de seguridad recomendada');
+        expect(result.systemInstruction).toContain('Tono natural, humano y profesional para conversar con recruiter');
+        expect(result.systemInstruction).toContain('Se conciso y preciso: responde en 2 a 5 frases cortas');
     });
 
     it('debería ejecutar pipeline de compresión', () => {
@@ -101,5 +122,48 @@ describe('PromptAssembler', () => {
         expect(result).toHaveProperty('prompt');
         expect(result).toHaveProperty('compressionStats');
         expect(result.compressionStats).toHaveProperty('steps');
+    });
+
+    it('prioriza y limita chunks semánticos según tuning', () => {
+        const previous = {
+            PROMPT_SEMANTIC_MAX_CHUNKS: process.env.PROMPT_SEMANTIC_MAX_CHUNKS,
+            PROMPT_SEMANTIC_CHUNK_MAX_CHARS: process.env.PROMPT_SEMANTIC_CHUNK_MAX_CHARS,
+        };
+
+        process.env.PROMPT_SEMANTIC_MAX_CHUNKS = '2';
+        process.env.PROMPT_SEMANTIC_CHUNK_MAX_CHARS = '80';
+
+        try {
+            const result = assembler.build({
+                candidateName: 'Ana QA',
+                profileContext: { usuario: { nombre: 'Ana' } },
+                semanticContext: [
+                    'Tengo experiencia profunda en Node.js y arquitectura de microservicios en produccion',
+                    'Tambien trabaje en React con testing automatizado y CI/CD',
+                    'Node.js y microservicios en produccion con observabilidad avanzada',
+                ],
+                conversationMemory: null,
+                selectedSections: ['experiencia_laboral', 'habilidades'],
+                question: 'Contame sobre Node.js y microservicios',
+            });
+
+            const prompt = result.prompt || result;
+            const semanticLines = prompt.split('\n').filter((line) => line.includes('[SEMANTICO:'));
+
+            expect(semanticLines.length).toBeLessThanOrEqual(2);
+            expect(semanticLines[0]).toContain('Node.js');
+        } finally {
+            if (previous.PROMPT_SEMANTIC_MAX_CHUNKS === undefined) {
+                delete process.env.PROMPT_SEMANTIC_MAX_CHUNKS;
+            } else {
+                process.env.PROMPT_SEMANTIC_MAX_CHUNKS = previous.PROMPT_SEMANTIC_MAX_CHUNKS;
+            }
+
+            if (previous.PROMPT_SEMANTIC_CHUNK_MAX_CHARS === undefined) {
+                delete process.env.PROMPT_SEMANTIC_CHUNK_MAX_CHARS;
+            } else {
+                process.env.PROMPT_SEMANTIC_CHUNK_MAX_CHARS = previous.PROMPT_SEMANTIC_CHUNK_MAX_CHARS;
+            }
+        }
     });
 });

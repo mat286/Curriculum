@@ -56,6 +56,73 @@ OLLAMA_MEM_LIMIT=14g
 EMBEDDING_INDEX_BATCH_SIZE=16
 ```
 
+Para mejorar TTFT/TTFB en rutas with_data (stream), agrega tambien:
+
+```env
+# Chat autenticado (/api/chat/ask/stream)
+CHAT_WITH_DATA_STREAM_NUM_PREDICT=160
+CHAT_WITH_DATA_STREAM_NUM_CTX=1536
+CHAT_WITH_DATA_STREAM_TIMEOUT=90000
+
+# Chat de candidato publico (/api/chat/candidate/:id/stream)
+CANDIDATE_CHAT_STREAM_NUM_PREDICT=160
+CANDIDATE_CHAT_STREAM_NUM_CTX=1536
+CANDIDATE_CHAT_STREAM_TIMEOUT=90000
+```
+
+Si priorizas velocidad por sobre longitud de respuesta, prueba:
+
+```env
+CHAT_WITH_DATA_STREAM_NUM_PREDICT=120
+CANDIDATE_CHAT_STREAM_NUM_PREDICT=120
+```
+
+Si notas respuestas demasiado cortas, vuelve a 160 o sube a 200.
+
+Para mejorar la calidad de respuestas de IA (mejor retrieval + menos alucinacion), agrega tambien:
+
+```env
+# Retrieval semantico
+SEMANTIC_TOPK_MIN=2
+SEMANTIC_TOPK_DEFAULT=3
+SEMANTIC_TOPK_MAX=5
+DISABLE_RAG_BELOW_CONFIDENCE=0.3
+SEMANTIC_MIN_SIMILARITY=0.68
+SEMANTIC_MIN_SIMILARITY_BY_TYPE={"fact":0.74,"detail":0.69,"general":0.66}
+SEMANTIC_NEAR_DUPLICATE_THRESHOLD=0.9
+SEMANTIC_CHUNK_MAX_CHARS=420
+
+# Hibrido BM25 + semantico
+ENABLE_HYBRID_SEARCH=true
+HYBRID_SEMANTIC_WEIGHT=0.6
+HYBRID_BM25_WEIGHT=0.4
+HYBRID_MAX_RESULTS=5
+HYBRID_DEDUPE_THRESHOLD=0.8
+ENABLE_RERANKING=true
+
+# Presupuesto de contexto/prompt
+PROMPT_MAX_CHARS=7200
+PROMPT_PROFILE_MAX_CHARS=2200
+PROMPT_SEMANTIC_MAX_CHARS=1800
+PROMPT_SEMANTIC_MAX_CHUNKS=5
+PROMPT_SEMANTIC_CHUNK_MAX_CHARS=280
+PROMPT_MEMORY_MAX_CHARS=600
+```
+
+Preset recomendado (equilibrado calidad/latencia):
+- Usa los valores de arriba tal cual.
+
+Preset calidad alta (si tienes recursos y aceptas mas latencia):
+- `SEMANTIC_TOPK_DEFAULT=4`
+- `SEMANTIC_TOPK_MAX=6`
+- `PROMPT_SEMANTIC_MAX_CHUNKS=6`
+- `PROMPT_MAX_CHARS=8200`
+
+Preset rapido (si priorizas velocidad):
+- `SEMANTIC_TOPK_DEFAULT=2`
+- `PROMPT_SEMANTIC_MAX_CHUNKS=4`
+- `PROMPT_MAX_CHARS=6200`
+
 Nota para Windows + Docker Desktop:
 - Docker Desktop debe tener CPU/RAM asignados >= a `OLLAMA_CPU_LIMIT` y `OLLAMA_MEM_LIMIT`.
 - Si Docker Desktop tiene menos recursos globales, los limites del compose no podran alcanzarse.

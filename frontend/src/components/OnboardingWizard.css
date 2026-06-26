@@ -112,6 +112,9 @@
     border-radius: 8px;
     background: rgba(15, 23, 42, 0.55);
     padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
 }
 
 .onboarding-step-enter {
@@ -122,6 +125,59 @@
     display: flex;
     flex-direction: column;
     gap: 16px;
+}
+
+.onboarding-step-frame {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.onboarding-step-kicker {
+    margin: 0;
+    color: var(--primary);
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.onboarding-step-title {
+    margin: 0;
+    font-size: 1.15rem;
+    line-height: 1.3;
+}
+
+.onboarding-step-goal {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.95rem;
+}
+
+.onboarding-step-support {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.93rem;
+}
+
+.onboarding-impact {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid rgba(96, 165, 250, 0.35);
+    background: rgba(15, 23, 42, 0.4);
+}
+
+.onboarding-impact strong {
+    font-size: 0.84rem;
+    color: #bfdbfe;
+}
+
+.onboarding-impact span {
+    color: #dbeafe;
+    font-size: 0.9rem;
 }
 
 .onboarding-step-content h2 {
@@ -143,6 +199,19 @@
     padding: 12px;
     outline: none;
     transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.wizard-label {
+    margin: 0 0 -6px;
+    font-size: 0.9rem;
+    color: var(--text);
+    font-weight: 600;
+}
+
+.wizard-field-error {
+    margin: -8px 0 0;
+    color: #fecaca;
+    font-size: 0.84rem;
 }
 
 .wizard-input:focus {
@@ -219,7 +288,7 @@
 .wizard-primary:disabled,
 .wizard-secondary:disabled {
     cursor: not-allowed;
-    opacity: 0.7;
+    opacity: 0.55;
     transform: none;
 }
 
@@ -254,19 +323,34 @@
         max-height: 100vh;
         border-radius: 0;
         border: none;
-        padding: 20px 16px;
+        padding: 18px 14px 86px;
     }
 
     .onboarding-step-card {
-        padding: 18px;
+        padding: 16px;
     }
 
     .onboarding-actions {
         flex-direction: column;
+        position: sticky;
+        bottom: -1px;
+        background: var(--surface);
+        padding: 10px 0 2px;
+        border-top: 1px solid var(--border);
     }
 
     .wizard-primary,
     .wizard-secondary {
         width: 100%;
+    }
+
+    .onboarding-step-title {
+        font-size: 1.05rem;
+    }
+
+    .onboarding-step-goal,
+    .onboarding-step-support,
+    .onboarding-impact span {
+        font-size: 0.88rem;
     }
 }

@@ -4,6 +4,7 @@ import { ValidationError, AuthError, NotFoundError } from '../middlewares/errorH
 import logger from '../utils/logger.js';
 import { getFullProfile } from '../services/dataService.js';
 import { CandidateContextSnapshotService } from '../modules/candidate/CandidateContextSnapshotService.js';
+import { normalizeText } from '../utils/textUtils.js';
 
 const snapshotService = new CandidateContextSnapshotService();
 const ONBOARDING_MIN_STEP = 1;
@@ -30,10 +31,6 @@ function normalizeBoolean(value) {
     if (typeof value === 'number') return value === 1;
     const normalized = String(value || '').trim().toLowerCase();
     return ['1', 'true', 'si', 'sí', 'yes'].includes(normalized);
-}
-
-function normalizeText(value) {
-    return typeof value === 'string' ? value.trim() : '';
 }
 
 function normalizeNullableText(value) {

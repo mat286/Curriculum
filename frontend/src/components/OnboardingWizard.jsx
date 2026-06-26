@@ -41,6 +41,34 @@ const getInitialStep = (user, userId) => {
     return backendStep;
 };
 
+const STEP_CONTENT = {
+    1: {
+        title: "Comenzar onboarding",
+        goal: "Definir el punto de partida de tu perfil conversacional.",
+        impact: "Esto mejora la claridad del proceso y reduce fricción inicial.",
+    },
+    2: {
+        title: "Foto de perfil",
+        goal: "Agregar una imagen para generar más confianza en recruiters.",
+        impact: "Esto mejora reconocimiento visual y credibilidad de tu perfil.",
+    },
+    3: {
+        title: "Datos básicos",
+        goal: "Completar identidad profesional para respuestas más precisas de IA.",
+        impact: "Esto mejora precisión contextual y descubribilidad de tu perfil.",
+    },
+    4: {
+        title: "Carga de CV",
+        goal: "Incorporar experiencia y logros para enriquecer tu avatar IA.",
+        impact: "Esto mejora calidad de respuestas y matching con búsquedas.",
+    },
+    5: {
+        title: "Activación",
+        goal: "Elegir visibilidad para que tu perfil esté listo para recruiters.",
+        impact: "Esto mejora tu alcance y acelera oportunidades de contacto.",
+    },
+};
+
 const readFileAsDataUrl = (file) =>
     new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -58,6 +86,12 @@ export default function OnboardingWizard() {
 
     const [currentStep, setCurrentStep] = useState(initialStep);
     const [error, setError] = useState("");
+    const [fieldErrors, setFieldErrors] = useState({
+        photo: "",
+        nombre: "",
+        puestoActual: "",
+        cv: "",
+    });
 
     const [savingStep, setSavingStep] = useState(false);
     const [uploadingPhoto, setUploadingPhoto] = useState(false);
@@ -80,6 +114,11 @@ export default function OnboardingWizard() {
     useEffect(() => {
         setCurrentStep(initialStep);
     }, [initialStep]);
+
+    useEffect(() => {
+        setError("");
+        setFieldErrors({ photo: "", nombre: "", puestoActual: "", cv: "" });
+    }, [currentStep]);
 
     useEffect(() => {
         document.body.classList.add("modal-open");
@@ -169,12 +208,13 @@ export default function OnboardingWizard() {
     const handlePhotoUpload = async () => {
         const validationError = validatePhoto(photoFile);
         if (validationError) {
-            setError(validationError);
+            setFieldErrors((previous) => ({ ...previous, photo: validationError }));
             return;
         }
 
         setUploadingPhoto(true);
         setError("");
+        setFieldErrors((previous) => ({ ...previous, photo: "" }));
 
         try {
             const uploadResponse = await onboarding.uploadPhoto(userId, photoFile);
@@ -202,24 +242,31 @@ export default function OnboardingWizard() {
     const validateBasicData = () => {
         const nameLength = basicData.nombre.trim().length;
         const roleLength = basicData.puestoActual.trim().length;
+        const errors = { nombre: "", puestoActual: "" };
 
         if (nameLength < 2 || nameLength > 100) {
-            return "El nombre debe tener entre 2 y 100 caracteres.";
+            errors.nombre = "El nombre debe tener entre 2 y 100 caracteres.";
         }
 
         if (roleLength > 150) {
-            return "El puesto actual no puede superar los 150 caracteres.";
+            errors.puestoActual = "El puesto actual no puede superar los 150 caracteres.";
         }
 
-        return "";
+        return errors;
     };
 
     const handleBasicDataNext = async () => {
-        const validationError = validateBasicData();
-        if (validationError) {
-            setError(validationError);
+        const validationErrors = validateBasicData();
+        if (validationErrors.nombre || validationErrors.puestoActual) {
+            setFieldErrors((previous) => ({
+                ...previous,
+                nombre: validationErrors.nombre,
+                puestoActual: validationErrors.puestoActual,
+            }));
             return;
         }
+
+        setFieldErrors((previous) => ({ ...previous, nombre: "", puestoActual: "" }));
 
         await saveStep(3, {
             nombre: basicData.nombre.trim(),
@@ -252,12 +299,13 @@ export default function OnboardingWizard() {
     const handleProcessCv = async () => {
         const validationError = validateCv();
         if (validationError) {
-            setError(validationError);
+            setFieldErrors((previous) => ({ ...previous, cv: validationError }));
             return;
         }
 
         setProcessingCv(true);
         setError("");
+        setFieldErrors((previous) => ({ ...previous, cv: "" }));
 
         try {
             const payload = {
@@ -313,6 +361,7 @@ export default function OnboardingWizard() {
 
     const isBusy = savingStep || uploadingPhoto || processingCv || completing;
     const progressPercent = Math.round((currentStep / TOTAL_STEPS) * 100);
+    const currentStepMeta = STEP_CONTENT[currentStep];
 
     return (
         <div className="onboarding-overlay" role="dialog" aria-modal="true" aria-label="Onboarding de candidato">
@@ -320,7 +369,9 @@ export default function OnboardingWizard() {
                 <header className="onboarding-header">
                     <div>
                         <h1 className="onboarding-title">Onboarding de tu perfil</h1>
-                        <p className="onboarding-subtitle">Paso {currentStep} de {TOTAL_STEPS}</p>
+                        <p className="onboarding-subtitle">
+                            Paso {currentStep} de {TOTAL_STEPS} · {progressPercent}% completado
+                        </p>
                     </div>
                     <div className="onboarding-progress-wrap" aria-label={`Progreso ${progressPercent}%`}>
                         <div className="onboarding-progress-bar" style={{ width: `${progressPercent}%` }} />
@@ -347,19 +398,28 @@ export default function OnboardingWizard() {
                 {error && <div className="onboarding-error">{error}</div>}
 
                 <section key={currentStep} className="onboarding-step-card onboarding-step-enter">
+                    <header className="onboarding-step-frame">
+                        <p className="onboarding-step-kicker">Paso {currentStep}</p>
+                        <h2 className="onboarding-step-title">{currentStepMeta?.title}</h2>
+                        <p className="onboarding-step-goal">{currentStepMeta?.goal}</p>
+                    </header>
+
+                    <aside className="onboarding-impact" aria-label="Impacto del paso">
+                        <strong>Esto mejora</strong>
+                        <span>{currentStepMeta?.impact}</span>
+                    </aside>
+
                     {currentStep === 1 && (
                         <div className="onboarding-step-content">
-                            <h2>¡Bienvenido a CV Conversacional!</h2>
-                            <p>
-                                Vas a crear un perfil inteligente que combina CV, narrativa profesional y un avatar conversacional
-                                para recruiters.
+                            <p className="onboarding-step-support">
+                                Vas a completar 5 pasos cortos para dejar tu perfil listo para búsquedas y entrevistas.
                             </p>
                             <div className="onboarding-actions">
                                 <button className="wizard-primary" onClick={handleWelcomeContinue} disabled={isBusy}>
-                                    {isBusy ? "Guardando..." : "Comenzar"}
+                                    {isBusy ? "Guardando..." : "Continuar"}
                                 </button>
                                 <button className="wizard-secondary" onClick={handleWelcomeSkip} disabled={isBusy}>
-                                    Saltear por ahora
+                                    Guardar y seguir
                                 </button>
                             </div>
                         </div>
@@ -367,15 +427,20 @@ export default function OnboardingWizard() {
 
                     {currentStep === 2 && (
                         <div className="onboarding-step-content">
-                            <h2>Foto de perfil</h2>
-                            <p>Sube una foto para generar mayor confianza y reconocimiento visual de tu perfil.</p>
+                            <p className="onboarding-step-support">Formato recomendado: JPG/PNG/WEBP hasta 5MB.</p>
+                            <label className="wizard-label" htmlFor="wizard-photo-input">
+                                Foto de perfil
+                            </label>
                             <input
+                                id="wizard-photo-input"
                                 type="file"
                                 accept="image/jpeg,image/png,image/webp"
                                 onChange={(event) => setPhotoFile(event.target.files?.[0] || null)}
                                 className="wizard-input"
                                 disabled={isBusy}
                             />
+
+                            {fieldErrors.photo && <p className="wizard-field-error">{fieldErrors.photo}</p>}
 
                             {photoPreview && (
                                 <div className="photo-preview-wrap">
@@ -388,10 +453,10 @@ export default function OnboardingWizard() {
                                     Volver
                                 </button>
                                 <button className="wizard-secondary" onClick={handlePhotoSkip} disabled={isBusy}>
-                                    Saltear
+                                    Guardar y seguir
                                 </button>
                                 <button className="wizard-primary" onClick={handlePhotoUpload} disabled={isBusy}>
-                                    {uploadingPhoto ? "Subiendo..." : "Subir foto"}
+                                    {uploadingPhoto ? "Subiendo..." : "Guardar y seguir"}
                                 </button>
                             </div>
                         </div>
@@ -399,10 +464,14 @@ export default function OnboardingWizard() {
 
                     {currentStep === 3 && (
                         <div className="onboarding-step-content">
-                            <h2>Datos básicos</h2>
-                            <p>Completa la información esencial que aparecerá primero en tu perfil.</p>
+                            <p className="onboarding-step-support">Solo pedimos datos clave para que tu perfil sea entendible al instante.</p>
+
+                            <label className="wizard-label" htmlFor="wizard-nombre-input">
+                                Nombre completo
+                            </label>
 
                             <input
+                                id="wizard-nombre-input"
                                 className="wizard-input"
                                 type="text"
                                 placeholder="Nombre completo"
@@ -413,7 +482,13 @@ export default function OnboardingWizard() {
                                 disabled={isBusy}
                                 maxLength={100}
                             />
+                            {fieldErrors.nombre && <p className="wizard-field-error">{fieldErrors.nombre}</p>}
+
+                            <label className="wizard-label" htmlFor="wizard-puesto-input">
+                                Puesto actual
+                            </label>
                             <input
+                                id="wizard-puesto-input"
                                 className="wizard-input"
                                 type="text"
                                 placeholder="Puesto actual"
@@ -424,7 +499,13 @@ export default function OnboardingWizard() {
                                 disabled={isBusy}
                                 maxLength={150}
                             />
+                            {fieldErrors.puestoActual && <p className="wizard-field-error">{fieldErrors.puestoActual}</p>}
+
+                            <label className="wizard-label" htmlFor="wizard-resumen-input">
+                                Resumen profesional (opcional)
+                            </label>
                             <textarea
+                                id="wizard-resumen-input"
                                 className="wizard-input wizard-textarea"
                                 placeholder="Resumen profesional"
                                 value={basicData.resumen}
@@ -440,7 +521,7 @@ export default function OnboardingWizard() {
                                     Volver
                                 </button>
                                 <button className="wizard-primary" onClick={handleBasicDataNext} disabled={isBusy}>
-                                    {savingStep ? "Guardando..." : "Siguiente"}
+                                    {savingStep ? "Guardando..." : "Guardar y seguir"}
                                 </button>
                             </div>
                         </div>
@@ -448,17 +529,26 @@ export default function OnboardingWizard() {
 
                     {currentStep === 4 && (
                         <div className="onboarding-step-content">
-                            <h2>Cargar CV</h2>
-                            <p>Sube tu archivo o pega el contenido para extraer y estructurar tu información profesional.</p>
+                            <p className="onboarding-step-support">Puedes subir archivo o pegar texto. Con uno de los dos es suficiente.</p>
+
+                            <label className="wizard-label" htmlFor="wizard-cv-file-input">
+                                Archivo CV
+                            </label>
 
                             <input
+                                id="wizard-cv-file-input"
                                 className="wizard-input"
                                 type="file"
                                 accept=".pdf,.doc,.docx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
                                 onChange={(event) => setCvFile(event.target.files?.[0] || null)}
                                 disabled={isBusy}
                             />
+
+                            <label className="wizard-label" htmlFor="wizard-cv-text-input">
+                                Texto CV
+                            </label>
                             <textarea
+                                id="wizard-cv-text-input"
                                 className="wizard-input wizard-textarea"
                                 placeholder="O copia y pega aquí el contenido de tu CV"
                                 value={cvText}
@@ -467,12 +557,14 @@ export default function OnboardingWizard() {
                                 rows={8}
                             />
 
+                            {fieldErrors.cv && <p className="wizard-field-error">{fieldErrors.cv}</p>}
+
                             <div className="onboarding-actions">
                                 <button className="wizard-secondary" onClick={() => goToStep(3)} disabled={isBusy}>
                                     Volver
                                 </button>
                                 <button className="wizard-primary" onClick={handleProcessCv} disabled={isBusy}>
-                                    {processingCv ? "Procesando..." : "Procesar CV"}
+                                    {processingCv ? "Procesando..." : "Guardar y seguir"}
                                 </button>
                             </div>
                         </div>
@@ -480,10 +572,8 @@ export default function OnboardingWizard() {
 
                     {currentStep === 5 && (
                         <div className="onboarding-step-content">
-                            <h2>Activar perfil público</h2>
-                            <p>
-                                Al activar tu perfil público, recruiters pueden descubrirte más rápido y conversar con tu avatar
-                                profesional.
+                            <p className="onboarding-step-support">
+                                Puedes finalizar publicando ahora o guardar y revisar después desde tu perfil.
                             </p>
 
                             <label className="wizard-toggle-row">
@@ -501,10 +591,10 @@ export default function OnboardingWizard() {
                                     Volver
                                 </button>
                                 <button className="wizard-secondary" onClick={() => handleComplete(false)} disabled={isBusy}>
-                                    {completing ? "Guardando..." : "Guardar y Revisar Después"}
+                                    {completing ? "Guardando..." : "Guardar y salir"}
                                 </button>
                                 <button className="wizard-primary" onClick={() => handleComplete(true)} disabled={isBusy || !isPublic}>
-                                    {completing ? "Completando..." : "Completar y Activar"}
+                                    {completing ? "Finalizando..." : "Finalizar y activar"}
                                 </button>
                             </div>
                         </div>

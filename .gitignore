@@ -42,3 +42,17 @@ chroma_data/
 # Coverage
 coverage/
 .nyc_output/
+
+# Vitest cache
+*.timestamp-*.mjs
+vitest.config.js.timestamp-*
+
+# Secrets adicionales
+server/backend/.env
+**/.env.production
+**/.env.staging
+
+# Archivos temporales
+*.tmp
+*.temp
+/tmp/

@@ -28,7 +28,7 @@ export class ResilientLLMProvider {
         this.openUntil = 0;
     }
 
-    async generate(prompt, options = {}) {
+    async generate(prompt, options = {}, systemInstruction = null) {
         if (this.isCircuitOpen()) {
             throw new Error('LLM temporalmente no disponible (circuit breaker)');
         }
@@ -36,7 +36,7 @@ export class ResilientLLMProvider {
         let lastError;
         for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
             try {
-                const out = await this.provider.generate(prompt, options);
+                const out = await this.provider.generate(prompt, options, systemInstruction);
                 this.markSuccess();
                 return out;
             } catch (error) {
@@ -48,13 +48,13 @@ export class ResilientLLMProvider {
         throw this.markFailure(lastError);
     }
 
-    async generateStream(prompt, options = {}, onChunk) {
+    async generateStream(prompt, options = {}, onChunk, systemInstruction = null) {
         if (this.isCircuitOpen()) {
             throw new Error('LLM temporalmente no disponible (circuit breaker)');
         }
 
         try {
-            const out = await this.provider.generateStream(prompt, options, onChunk);
+            const out = await this.provider.generateStream(prompt, options, onChunk, systemInstruction);
             this.markSuccess();
             return out;
         } catch (error) {

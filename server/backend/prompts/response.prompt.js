@@ -1,3 +1,4 @@
+/** @deprecated Sin importadores activos. Funcionalidad absorbida por PromptAssembler.js */
 function compactData(value) {
     if (Array.isArray(value)) {
         const cleanedArray = value

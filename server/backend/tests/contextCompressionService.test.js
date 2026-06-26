@@ -51,7 +51,7 @@ describe('ContextCompressionService', () => {
 
     it('debería limitar conversation history a últimas 3 exchanges', () => {
         const memory = {
-            history: [
+            messages: [
                 { role: 'user', content: 'msg1' },
                 { role: 'assistant', content: 'resp1' },
                 { role: 'user', content: 'msg2' },
@@ -66,7 +66,7 @@ describe('ContextCompressionService', () => {
         const result = service.compressConversationMemory(memory, 3);
 
         expect(result.truncated).toBe(true);
-        expect(result.compressedMemory.history.length).toBe(6); // 3 exchanges = 6 msgs
+        expect(result.compressedMemory.messages.length).toBe(6); // 3 exchanges = 6 msgs
         expect(result.truncatedCount).toBe(2); // 2 msgs eliminados
     });
 

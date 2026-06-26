@@ -1,130 +1,55 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import { Link, useParams } from "react-router-dom";
 import CVModal from "../components/CVModal";
 import { useAuth } from "../context/AuthContext";
 import { candidateChatService, candidatesService, userService } from "../services/api";
-import { useStreamMetrics } from "../hooks/useStreamMetrics";
-import StreamingIndicator from "../components/StreamingIndicator";
-import { toText, toBoolean, normalizeProfileItems as normalizeRichItems } from "../utils/profileNormalizers";
+import { normalizeCandidateProfile } from "../utils/profileNormalizers";
 import "./CandidateChatPage.css";
 
 const buildInitialMessage = (name = "este candidato", isOwnChat = false) => ({
     id: `welcome-${Date.now()}`,
     role: "assistant",
     content: isOwnChat
-        ? `Hola ${name}. Estoy listo para ayudarte a practicar entrevistas, resumir tu experiencia y mejorar cómo presentas tu perfil.`
-        : `Hola. Soy el avatar de ${name}. Podés preguntarme sobre mi experiencia, skills, proyectos o forma de trabajo.`,
+        ? `Hola ${name}. Estoy listo para ayudarte a practicar entrevistas, resumir tu experiencia y mejorar cómo presentás tu perfil.`
+        : `Hola. Soy el avatar de ${name}. Podés preguntarme sobre mi experiencia, habilidades, proyectos o forma de trabajo.`,
 });
 
-const normalizeTagItems = (items) => {
-    if (!Array.isArray(items)) return [];
-
-    return items
-        .map((item, index) => {
-            if (typeof item === "string") {
-                return { id: `tag-${index}`, titulo: item };
-            }
-
-            return {
-                id: item?.id ?? `tag-${index}`,
-                titulo: toText(item?.titulo || item?.nombre || item?.idioma || item?.skill || item?.habilidad),
-                nivel: toText(item?.nivel || item?.level),
-            };
-        })
-        .filter((item) => item.titulo);
-};
-
-const normalizeCandidateProfile = (candidate = {}, data = {}) => {
-    const about = Array.isArray(data.sobre_mi) ? data.sobre_mi[0] || {} : data.sobre_mi || {};
-    const fullName =
-        toText(candidate.nombre) ||
-        [data.usuario?.nombre, data.usuario?.apellido].filter(Boolean).join(" ").trim() ||
-        "Candidato";
-
-    return {
-        name: fullName,
-        headline: toText(candidate.puestoActual || data.usuario?.puesto_actual || data.usuario?.resumen || "Perfil conversacional activo"),
-        summary: toText(
-            candidate.resumen ||
-            about.descripcion ||
-            data.usuario?.objetivo_profesional ||
-            data.usuario?.resumen ||
-            "Perfil listo para conversar y ser evaluado por IA."
-        ),
-        location: toText(candidate.ubicacion || data.usuario?.direccion),
-        availability: toText(data.usuario?.disponibilidad),
-        preferredMode: toText(data.usuario?.modalidad_preferida),
-        salary: toText(data.usuario?.pretension_salarial),
-        linkedinUrl: toText(data.usuario?.linkedin_url || candidate.linkedin_url || candidate.linkedinUrl),
-        githubUrl: toText(data.usuario?.github_url || candidate.github_url || candidate.githubUrl),
-        portfolioUrl: toText(data.usuario?.portfolio_url || candidate.portfolio_url || candidate.portfolioUrl),
-        experiences: normalizeRichItems(data.experiencia_laboral || candidate.experiencia_laboral || candidate.experiencias || []),
-        projects: normalizeRichItems(data.proyectos || candidate.proyectos || candidate.projects || []),
-        skills: normalizeTagItems(data.habilidades || candidate.habilidades || candidate.skills || []),
-        studies: normalizeRichItems(data.educacion || candidate.estudios || candidate.educacion || []),
-        languages: normalizeTagItems(data.idiomas || candidate.idiomas || candidate.languages || []),
-    };
-};
-
-const STREAM_STATUS_LABELS = {
-    thinking: "Pensando",
-    retrieving: "Recuperando contexto",
-    generating: "Generando respuesta",
-    finalizing: "Finalizando",
-};
-
-const normalizeStreamStatus = (value) => {
-    const text = toText(value).toLowerCase();
-    if (["thinking", "retrieving", "generating", "finalizing"].includes(text)) {
-        return text;
-    }
-    return "";
-};
-
-const roundMs = (value) => {
-    const parsed = Number(value);
-    if (!Number.isFinite(parsed) || parsed < 0) return null;
-    return Math.round(parsed);
-};
+// Cuenta segundos mientras loading=true
+function useElapsedSeconds(active) {
+    const [elapsed, setElapsed] = useState(0);
+    useEffect(() => {
+        if (!active) { setElapsed(0); return; }
+        setElapsed(0);
+        const id = setInterval(() => setElapsed((s) => s + 1), 1000);
+        return () => clearInterval(id);
+    }, [active]);
+    return elapsed;
+}
 
 export default function CandidateChatPage() {
     const { id } = useParams();
     const { user } = useAuth();
-    const { metrics, handleStreamEvent, reset: resetMetrics } = useStreamMetrics();
     const [candidate, setCandidate] = useState(null);
     const [profileForCV, setProfileForCV] = useState(null);
     const [messages, setMessages] = useState([]);
     const [input, setInput] = useState("");
     const [loading, setLoading] = useState(false);
-    const [streamStatus, setStreamStatus] = useState("thinking");
     const [loadingProfile, setLoadingProfile] = useState(true);
     const [error, setError] = useState("");
     const [lastFailedMessage, setLastFailedMessage] = useState("");
     const [showCVModal, setShowCVModal] = useState(false);
-    const [retryCount, setRetryCount] = useState(0);
-    const [streamMetrics, setStreamMetrics] = useState({
-        requestId: "",
-        routed: "",
-        cached: false,
-        backendTtfbMs: null,
-        frontendTtfbMs: null,
-        totalMs: null,
-        semanticMs: null,
-        promptChars: null,
-    });
+    const elapsed = useElapsedSeconds(loading);
 
     const abortControllerRef = useRef(null);
     const tokenBufferRef = useRef("");
     const flushTimerRef = useRef(null);
-    const activeStreamingMsgIdRef = useRef("");
-    const streamPerfRef = useRef({ startedAt: 0, firstTokenAt: 0, requestId: "" });
+    const threadRef = useRef(null);
     const retryTimeoutRef = useRef(null);
 
     const storageKey = useMemo(() => `cv-chat-history:candidate:${id}`, [id]);
     const currentUserId = user?.id || user?.userId || user?.googleId;
     const isOwnChat = String(currentUserId || "") === String(id || "");
 
-    // Bloquea el scroll de la página y oculta el footer mientras el chat está activo
     useEffect(() => {
         document.body.classList.add("chat-page-active");
         return () => document.body.classList.remove("chat-page-active");
@@ -133,329 +58,175 @@ export default function CandidateChatPage() {
     useEffect(() => {
         const saved = localStorage.getItem(storageKey);
         if (saved) {
-            try {
-                setMessages(JSON.parse(saved));
-            } catch {
-                setMessages([]);
-            }
+            try { setMessages(JSON.parse(saved)); } catch { setMessages([]); }
         } else {
             setMessages([]);
         }
     }, [storageKey]);
 
     useEffect(() => {
-        if (messages.length > 0) {
-            localStorage.setItem(storageKey, JSON.stringify(messages));
-        }
+        if (messages.length > 0) localStorage.setItem(storageKey, JSON.stringify(messages));
     }, [messages, storageKey]);
 
     useEffect(() => {
-        return () => {
-            if (flushTimerRef.current) {
-                clearTimeout(flushTimerRef.current);
-                flushTimerRef.current = null;
-            }
-            if (retryTimeoutRef.current) {
-                clearTimeout(retryTimeoutRef.current);
-                retryTimeoutRef.current = null;
-            }
-            if (abortControllerRef.current) {
-                abortControllerRef.current.abort();
-                abortControllerRef.current = null;
-            }
-        };
+        if (threadRef.current) {
+            threadRef.current.scrollTop = threadRef.current.scrollHeight;
+        }
+    }, [messages]);
+
+    useEffect(() => () => {
+        clearTimeout(flushTimerRef.current);
+        clearTimeout(retryTimeoutRef.current);
+        abortControllerRef.current?.abort();
     }, []);
 
     useEffect(() => {
         let mounted = true;
-
-        const loadCandidate = async () => {
+        const load = async () => {
             setError("");
             setLoadingProfile(true);
-
             try {
-                const [publicCandidatesResult, detailedProfileResult] = await Promise.allSettled([
+                const [publicResult, detailedResult] = await Promise.allSettled([
                     candidatesService.getAll(),
                     userService.getProfile(id),
                 ]);
-
-                const publicList = publicCandidatesResult.status === "fulfilled" ? publicCandidatesResult.value || [] : [];
-                const foundCandidate = publicList.find((item) => String(item.id) === String(id));
-                const detailedProfile = detailedProfileResult.status === "fulfilled" ? detailedProfileResult.value || {} : {};
-
                 if (!mounted) return;
+                const publicList = publicResult.status === "fulfilled" ? publicResult.value || [] : [];
+                const found = publicList.find((item) => String(item.id) === String(id));
+                const detailed = detailedResult.status === "fulfilled" ? detailedResult.value || {} : {};
 
-                if (!foundCandidate && !detailedProfile?.usuario && !detailedProfile?.sobre_mi) {
+                if (!found && !detailed?.usuario && !detailed?.sobre_mi) {
                     setError("Este candidato no está disponible públicamente.");
                     return;
                 }
 
-                const normalizedProfile = normalizeCandidateProfile(foundCandidate || {}, detailedProfile);
-
-                setProfileForCV(normalizedProfile);
+                const norm = normalizeCandidateProfile(found || {}, detailed);
+                setProfileForCV(norm);
                 setCandidate({
                     id,
-                    nombre: normalizedProfile.name,
-                    puestoActual: normalizedProfile.headline,
-                    resumen: normalizedProfile.summary,
-                    habilidades: (normalizedProfile.skills || []).map((item) => item.titulo).filter(Boolean),
+                    nombre: norm.name,
+                    puestoActual: norm.headline,
+                    resumen: norm.summary,
+                    habilidades: (norm.skills || []).map((s) => s.titulo).filter(Boolean),
                 });
-                setMessages((current) => (current.length > 0 ? current : [buildInitialMessage(normalizedProfile.name, isOwnChat)]));
+                setMessages((cur) => cur.length > 0 ? cur : [buildInitialMessage(norm.name, isOwnChat)]);
             } catch {
-                if (mounted) {
-                    setError("No se pudo cargar el perfil del candidato.");
-                }
+                if (mounted) setError("No se pudo cargar el perfil del candidato.");
             } finally {
                 if (mounted) setLoadingProfile(false);
             }
         };
-
-        loadCandidate();
-
-        return () => {
-            mounted = false;
-        };
+        load();
+        return () => { mounted = false; };
     }, [id, isOwnChat]);
 
-    const flushBufferedTokens = useCallback((streamingMsgId) => {
+    const flushBuffer = useCallback((msgId) => {
         const chunk = tokenBufferRef.current;
         if (!chunk) return;
-
         tokenBufferRef.current = "";
-        setMessages((current) =>
-            current.map((m) => (m.id === streamingMsgId ? { ...m, content: m.content + chunk } : m))
-        );
+        setMessages((cur) => cur.map((m) => m.id === msgId ? { ...m, content: m.content + chunk } : m));
     }, []);
 
-    const scheduleTokenFlush = useCallback((streamingMsgId) => {
+    const scheduleFlush = useCallback((msgId) => {
         if (flushTimerRef.current) return;
-
-        const bufferSize = tokenBufferRef.current.length;
-        const delay = bufferSize > 80 ? 40 : bufferSize > 20 ? 50 : 60;
-
         flushTimerRef.current = setTimeout(() => {
             flushTimerRef.current = null;
-            flushBufferedTokens(streamingMsgId);
-            if (tokenBufferRef.current.length > 0) {
-                scheduleTokenFlush(streamingMsgId);
-            }
-        }, delay);
-    }, [flushBufferedTokens]);
+            flushBuffer(msgId);
+            if (tokenBufferRef.current.length > 0) scheduleFlush(msgId);
+        }, 45);
+    }, [flushBuffer]);
 
-    const finishStreamingMessage = useCallback((streamingMsgId, options = {}) => {
-        const { keepLoading = false, status = "thinking" } = options;
+    const finishStream = useCallback((msgId) => {
+        clearTimeout(flushTimerRef.current);
+        flushTimerRef.current = null;
+        flushBuffer(msgId);
+        setMessages((cur) => cur.map((m) => m.id === msgId ? { ...m, streaming: false } : m));
+        setLoading(false);
+    }, [flushBuffer]);
 
-        if (flushTimerRef.current) {
-            clearTimeout(flushTimerRef.current);
-            flushTimerRef.current = null;
-        }
-
-        flushBufferedTokens(streamingMsgId);
-        activeStreamingMsgIdRef.current = "";
-
-        setMessages((current) =>
-            current.map((m) => (m.id === streamingMsgId ? { ...m, streaming: false } : m))
-        );
-
-        setStreamStatus(status);
-        if (!keepLoading) setLoading(false);
-    }, [flushBufferedTokens]);
-
-    const applyStreamEventStatus = useCallback((eventPayload) => {
-        const explicitStatus = normalizeStreamStatus(
-            eventPayload?.status || eventPayload?.phase || eventPayload?.payload?.status || eventPayload?.payload?.phase
-        );
-        if (explicitStatus) {
-            setStreamStatus(explicitStatus);
-            return;
-        }
-
-        const eventType = toText(eventPayload?.eventType || eventPayload?.type).toLowerCase();
-        if (eventType === "ack") {
-            setStreamStatus("thinking");
-            return;
-        }
-
-        if (eventType === "status") {
-            const fallbackStatus = normalizeStreamStatus(eventPayload?.value || eventPayload?.name);
-            if (fallbackStatus) setStreamStatus(fallbackStatus);
-        }
-    }, []);
-
-    const handleSend = async (messageOverride = "") => {
-        const text = (messageOverride || input).trim();
+    const handleSend = async (override = "") => {
+        const text = (override || input).trim();
         if (!text || loading) return;
 
         const streamingMsgId = `a-stream-${Date.now()}`;
-        activeStreamingMsgIdRef.current = streamingMsgId;
         tokenBufferRef.current = "";
-        streamPerfRef.current = { startedAt: Date.now(), firstTokenAt: 0, requestId: "" };
 
-        if (abortControllerRef.current) {
-            abortControllerRef.current.abort();
-        }
-
+        abortControllerRef.current?.abort();
         const controller = new AbortController();
         abortControllerRef.current = controller;
 
-        setMessages((current) => [
-            ...current,
+        setMessages((cur) => [
+            ...cur,
             { id: `u-${Date.now()}`, role: "user", content: text },
             { id: streamingMsgId, role: "assistant", content: "", streaming: true },
         ]);
-        if (!messageOverride) setInput("");
+        if (!override) setInput("");
         setLoading(true);
-        setStreamStatus("thinking");
         setError("");
         setLastFailedMessage("");
-        setRetryCount(0);
-        resetMetrics();
-        setStreamMetrics({
-            requestId: "",
-            routed: "",
-            cached: false,
-            backendTtfbMs: null,
-            frontendTtfbMs: null,
-            totalMs: null,
-            semanticMs: null,
-            promptChars: null,
-        });
 
         await candidateChatService.askStream(
             id,
             text,
-            // onToken
             (token) => {
-                if (!streamPerfRef.current.firstTokenAt) {
-                    const firstTokenAt = Date.now();
-                    streamPerfRef.current.firstTokenAt = firstTokenAt;
-                    const frontendTtfbMs = roundMs(firstTokenAt - streamPerfRef.current.startedAt);
-                    setStreamMetrics((current) => ({ ...current, frontendTtfbMs }));
-                }
                 tokenBufferRef.current += token;
-                setStreamStatus("generating");
-                scheduleTokenFlush(streamingMsgId);
+                scheduleFlush(streamingMsgId);
             },
-            // onError
             (err) => {
-                const isAbort = err?.name === "AbortError";
-                finishStreamingMessage(streamingMsgId);
-
-                if (isAbort) {
-                    setMessages((current) =>
-                        current.map((m) =>
-                            m.id === streamingMsgId && !m.content
-                                ? { ...m, content: "Generación cancelada.", streaming: false }
-                                : m
-                        )
-                    );
-                    setError("");
+                finishStream(streamingMsgId);
+                if (err?.name === "AbortError") {
+                    setMessages((cur) => cur.map((m) =>
+                        m.id === streamingMsgId && !m.content
+                            ? { ...m, content: "Respuesta cancelada.", streaming: false }
+                            : m
+                    ));
                     return;
                 }
-
-                setMessages((current) =>
-                    current.map((m) =>
-                        m.id === streamingMsgId
-                            ? { ...m, content: err.message || "No se pudo responder en este momento.", streaming: false }
-                            : m
-                    )
-                );
-                setError(err.message || "No se pudo enviar el mensaje.");
+                setMessages((cur) => cur.map((m) =>
+                    m.id === streamingMsgId
+                        ? { ...m, content: "No se pudo obtener respuesta. Intentalo de nuevo.", streaming: false }
+                        : m
+                ));
+                setError("No se pudo obtener una respuesta.");
                 setLastFailedMessage(text);
             },
-            // onDone
-            () => {
-                setStreamStatus("finalizing");
-                finishStreamingMessage(streamingMsgId, { status: "thinking" });
-            },
-            {
-                signal: controller.signal,
-                onEvent: (eventPayload) => {
-                    // Delegar al hook de métricas
-                    handleStreamEvent(eventPayload);
-                    
-                    applyStreamEventStatus(eventPayload);
-
-                    const eventType = toText(eventPayload?.eventType || eventPayload?.type).toLowerCase();
-                    const payload = eventPayload?.payload && typeof eventPayload.payload === "object" ? eventPayload.payload : {};
-                    const requestId = toText(eventPayload?.requestId || payload.requestId);
-
-                    if (eventType === "ack" && requestId) {
-                        streamPerfRef.current.requestId = requestId;
-                        setStreamMetrics((current) => ({ ...current, requestId }));
-                        return;
-                    }
-
-                    if (eventType === "metrics") {
-                        setStreamMetrics((current) => ({
-                            ...current,
-                            requestId: requestId || current.requestId || streamPerfRef.current.requestId,
-                            routed: toText(payload.routed || eventPayload?.routed || current.routed),
-                            cached: payload.cached ?? eventPayload?.cached ?? current.cached,
-                            backendTtfbMs: roundMs(payload.ttfbMs ?? eventPayload?.ttfbMs) ?? current.backendTtfbMs,
-                            totalMs: roundMs(payload.totalMs ?? eventPayload?.totalMs) ?? current.totalMs,
-                            semanticMs: roundMs(payload.semanticMs ?? eventPayload?.semanticMs) ?? current.semanticMs,
-                            promptChars: Number.isFinite(Number(payload.promptChars ?? eventPayload?.promptChars))
-                                ? Number(payload.promptChars ?? eventPayload?.promptChars)
-                                : current.promptChars,
-                        }));
-                    }
-                },
-            }
-        ).catch((unexpectedErr) => {
-            finishStreamingMessage(streamingMsgId);
-            setMessages((current) =>
-                current.map((m) =>
-                    m.id === streamingMsgId
-                        ? { ...m, content: unexpectedErr.message || "Error inesperado.", streaming: false }
-                        : m
-                )
-            );
-            setError(unexpectedErr.message || "Error inesperado.");
+            () => finishStream(streamingMsgId),
+            { signal: controller.signal, onEvent: () => {} }
+        ).catch((err) => {
+            finishStream(streamingMsgId);
+            setMessages((cur) => cur.map((m) =>
+                m.id === streamingMsgId
+                    ? { ...m, content: err.message || "Error inesperado.", streaming: false }
+                    : m
+            ));
+            setError(err.message || "Error inesperado.");
             setLastFailedMessage(text);
         }).finally(() => {
             abortControllerRef.current = null;
         });
     };
 
-    const handleCancelStreaming = () => {
-        if (!loading || !abortControllerRef.current) return;
-        abortControllerRef.current.abort();
+    const handleCancel = () => {
+        abortControllerRef.current?.abort();
         abortControllerRef.current = null;
     };
 
-    const handleRetryLastMessage = () => {
+    const handleRetry = () => {
         if (!lastFailedMessage || loading) return;
-
-        // Exponential backoff: 1s, 2s, 4s
-        const backoffDelays = [1000, 2000, 4000];
-        const delay = backoffDelays[Math.min(retryCount, backoffDelays.length - 1)];
-
-        setError(`Reintentando en ${Math.round(delay / 1000)}s...`);
-
-        if (retryTimeoutRef.current) {
-            clearTimeout(retryTimeoutRef.current);
-        }
-
-        retryTimeoutRef.current = setTimeout(() => {
-            retryTimeoutRef.current = null;
-            setRetryCount((prev) => prev + 1);
-            handleSend(lastFailedMessage);
-        }, delay);
+        setError("");
+        handleSend(lastFailedMessage);
     };
 
-    const handleKeyDown = (event) => {
-        if (event.key === "Enter" && !event.shiftKey) {
-            event.preventDefault();
-            handleSend();
-        }
-    };
-
-    const handleClearHistory = () => {
-        if (messages.length > 1 && !window.confirm("¿Querés borrar el historial de esta conversación?")) return;
+    const handleClear = () => {
+        if (messages.length > 1 && !window.confirm("¿Borrar el historial de esta conversación?")) return;
         localStorage.removeItem(storageKey);
         setMessages([buildInitialMessage(candidate?.nombre, isOwnChat)]);
         setError("");
+        setLastFailedMessage("");
+    };
+
+    const handleKeyDown = (e) => {
+        if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
     };
 
     if (error && !candidate) {
@@ -473,6 +244,8 @@ export default function CandidateChatPage() {
     return (
         <>
             <div className={`candidate-chat-page ${isOwnChat ? "own-mode" : "candidate-mode"}`}>
+
+                {/* Sidebar */}
                 <aside className="candidate-chat-sidebar">
                     {loadingProfile ? (
                         <>
@@ -488,129 +261,96 @@ export default function CandidateChatPage() {
                         </>
                     ) : (
                         <>
-                    <span className={`candidate-mode-pill ${isOwnChat ? "own" : "public"}`}>
-                        {isOwnChat ? "Tu chat personal" : "Candidato evaluado"}
-                    </span>
-
-                    <h1>{candidate?.nombre || "Sin nombre"}</h1>
-                    {candidate?.puestoActual && <p className="candidate-chat-role">{candidate.puestoActual}</p>}
-                    {candidate?.resumen && <p className="candidate-chat-summary">{candidate.resumen}</p>}
-
-                    <div className="candidate-chat-meta-row">
-                        <span>{isOwnChat ? "Modo personal" : "Modo evaluación"}</span>
-                        <span>Historial local</span>
-                    </div>
-
-                    {candidate?.habilidades?.length > 0 && (
-                        <div className="candidate-chat-tags">
-                            {candidate.habilidades.slice(0, 6).map((skill) => (
-                                <span key={skill}>{skill}</span>
-                            ))}
-                        </div>
-                    )}
-
-                    <div className="candidate-chat-links">
-                        {isOwnChat ? (
-                            <Link to="/perfil">Editar mi perfil</Link>
-                        ) : (
-                            <Link to="/search">Buscar más candidatos</Link>
-                        )}
-                        <Link to="/">Volver al inicio</Link>
-                    </div>
+                            <span className={`candidate-mode-pill ${isOwnChat ? "own" : "public"}`}>
+                                {isOwnChat ? "Tu perfil" : "Candidato"}
+                            </span>
+                            <h1>{candidate?.nombre || "Sin nombre"}</h1>
+                            {candidate?.puestoActual && <p className="candidate-chat-role">{candidate.puestoActual}</p>}
+                            {candidate?.resumen && <p className="candidate-chat-summary">{candidate.resumen}</p>}
+                            {candidate?.habilidades?.length > 0 && (
+                                <div className="candidate-chat-tags">
+                                    {candidate.habilidades.slice(0, 8).map((s) => <span key={s}>{s}</span>)}
+                                </div>
+                            )}
+                            <div className="candidate-chat-links">
+                                {isOwnChat
+                                    ? <Link to="/perfil">Editar mi perfil</Link>
+                                    : <Link to="/search">Ver más candidatos</Link>}
+                                <Link to="/">Volver al inicio</Link>
+                            </div>
                         </>
                     )}
                 </aside>
 
+                {/* Main */}
                 <section className="candidate-chat-main">
-                    <div className="candidate-chat-topbar">
-                        <div>
-                            <span className="candidate-chat-kicker">{isOwnChat ? "Chat personal" : "Entrevista de candidato"}</span>
-                            <h2>{isOwnChat ? `Chat de ${candidate?.nombre || "tu perfil"}` : `Conversación con ${candidate?.nombre || "el candidato"}`}</h2>
-                            <p>
-                                {isOwnChat
-                                    ? "Practica respuestas, revisa tu CV y mejora cómo te presentas en una entrevista."
-                                    : "Consulta experiencia, skills y compatibilidad del perfil antes de tomar una decisión."}
-                            </p>
-                            
-                            {/* StreamingIndicator integrado */}
-                            {loading && (
-                                <StreamingIndicator
-                                    status={metrics.status}
-                                    ttft={metrics.ttft}
-                                    thinkingMs={metrics.thinkingMs}
-                                    errorMessage={metrics.errorMessage}
-                                    onRetry={handleRetryLastMessage}
-                                />
-                            )}
 
-                            {(streamMetrics.requestId || streamMetrics.totalMs || streamMetrics.backendTtfbMs || streamMetrics.frontendTtfbMs) && (
-                                <div className="candidate-stream-metrics">
-                                    {streamMetrics.requestId && <span className="candidate-stream-metric">req: {streamMetrics.requestId.slice(0, 8)}</span>}
-                                    {streamMetrics.frontendTtfbMs !== null && <span className="candidate-stream-metric">TTFT UX: {streamMetrics.frontendTtfbMs}ms</span>}
-                                    {streamMetrics.backendTtfbMs !== null && <span className="candidate-stream-metric">TTFB BE: {streamMetrics.backendTtfbMs}ms</span>}
-                                    {streamMetrics.totalMs !== null && <span className="candidate-stream-metric">Total: {streamMetrics.totalMs}ms</span>}
-                                    {streamMetrics.routed && <span className="candidate-stream-metric">route: {streamMetrics.routed}</span>}
-                                    {streamMetrics.cached ? <span className="candidate-stream-metric">cache: hit</span> : null}
-                                </div>
+                    {/* Topbar compacto */}
+                    <div className="candidate-chat-topbar">
+                        <div className="topbar-info">
+                            <span className="topbar-name">
+                                {candidate?.nombre || (loadingProfile ? "Cargando…" : "Chat")}
+                            </span>
+                            {loading ? (
+                                <span className="topbar-status topbar-status--thinking">
+                                    <span className="status-dot" />
+                                    {elapsed < 4 ? "Procesando…" : `Procesando… ${elapsed}s`}
+                                </span>
+                            ) : (
+                                <span className="topbar-status topbar-status--ready">En línea</span>
                             )}
                         </div>
 
-                        <div className="candidate-chat-topbar-actions">
-                            <button type="button" className="candidate-cv-button" onClick={() => setShowCVModal(true)}>
-                                📄 Ver CV
+                        <div className="topbar-actions">
+                            <button className="btn-ghost" onClick={() => setShowCVModal(true)} title="Ver CV completo">
+                                📄 CV
                             </button>
                             {loading ? (
-                                <button
-                                    type="button"
-                                    className="candidate-cancel-button"
-                                    onClick={handleCancelStreaming}
-                                    title="Cancelar respuesta en curso"
-                                >
+                                <button className="btn-danger" onClick={handleCancel}>
                                     Cancelar
                                 </button>
                             ) : (
-                                <button
-                                    type="button"
-                                    className="candidate-retry-button"
-                                    onClick={handleRetryLastMessage}
-                                    disabled={!lastFailedMessage}
-                                    title="Reintentar último mensaje"
-                                >
-                                    Reintentar
-                                </button>
+                                lastFailedMessage && (
+                                    <button className="btn-secondary" onClick={handleRetry}>
+                                        Reintentar
+                                    </button>
+                                )
                             )}
-                            <button type="button" className="candidate-clear-button" onClick={handleClearHistory} title="Limpiar historial">
-                                ↺ Limpiar
+                            <button className="btn-ghost btn-ghost--subtle" onClick={handleClear} title="Borrar historial">
+                                Limpiar
                             </button>
                         </div>
                     </div>
 
-                    <div className="candidate-chat-thread">
-                        {messages.map((message) => (
-                            <div key={message.id} className={`candidate-bubble ${message.role}`}>
-                                {message.streaming && !message.content ? (
+                    {/* Mensajes */}
+                    <div className="candidate-chat-thread" ref={threadRef}>
+                        {messages.map((msg) => (
+                            <div key={msg.id} className={`candidate-bubble ${msg.role}`}>
+                                {msg.streaming && !msg.content ? (
                                     <span className="candidate-loading-dots">
-                                        <span></span><span></span><span></span>
+                                        <span /><span /><span />
                                     </span>
                                 ) : (
                                     <>
-                                        {message.content}
-                                        {message.streaming && <span className="candidate-stream-cursor" aria-hidden="true" />}
+                                        <span className="bubble-text">{msg.content}</span>
+                                        {msg.streaming && <span className="candidate-stream-cursor" aria-hidden="true" />}
                                     </>
                                 )}
                             </div>
                         ))}
-                        {loading && messages.every((m) => !m.streaming) && (
-                            <div className="candidate-bubble assistant">
-                                <span className="candidate-loading-dots">
-                                    <span></span><span></span><span></span>
-                                </span>
-                            </div>
-                        )}
                     </div>
 
-                    {error && candidate && <div className="candidate-chat-error">{error}</div>}
+                    {/* Error inline */}
+                    {error && candidate && (
+                        <div className="candidate-chat-error">
+                            <span>{error}</span>
+                            {lastFailedMessage && (
+                                <button className="error-retry-btn" onClick={handleRetry}>Reintentar</button>
+                            )}
+                        </div>
+                    )}
 
+                    {/* Input */}
                     <div className="candidate-chat-input-row">
                         <textarea
                             value={input}
@@ -618,13 +358,26 @@ export default function CandidateChatPage() {
                             onKeyDown={handleKeyDown}
                             placeholder={
                                 isOwnChat
-                                    ? "Ej: resumime mi perfil para una entrevista laboral"
-                                    : "Ej: ¿Tenés experiencia con Node.js y APIs REST?"
+                                    ? "Escribí tu pregunta… (Enter para enviar)"
+                                    : "Preguntá sobre experiencia, skills o proyectos… (Enter para enviar)"
                             }
-                            rows={3}
+                            rows={2}
+                            disabled={loading}
                         />
-                        <button type="button" onClick={handleSend} disabled={loading || !input.trim()}>
-                            {loading ? "Enviando..." : "Enviar"}
+                        <button
+                            className="btn-send"
+                            onClick={() => handleSend()}
+                            disabled={loading || !input.trim()}
+                            title="Enviar (Enter)"
+                        >
+                            {loading ? (
+                                <span className="send-spinner" />
+                            ) : (
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                    <line x1="22" y1="2" x2="11" y2="13" />
+                                    <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                                </svg>
+                            )}
                         </button>
                     </div>
                 </section>

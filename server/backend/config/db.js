@@ -29,6 +29,23 @@ const PROFILE_SCHEMA_STATEMENTS = [
     "ALTER TABLE usuarios ADD COLUMN role ENUM('candidate', 'recruiter') NOT NULL DEFAULT 'candidate'",
 ];
 
+const AUTH_SCHEMA_STATEMENTS = [
+    `
+    CREATE TABLE IF NOT EXISTS refresh_tokens (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        token_hash VARCHAR(64) NOT NULL UNIQUE,
+        expires_at DATETIME NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        revoked_at TIMESTAMP NULL DEFAULT NULL,
+        device_hint VARCHAR(255) NULL,
+        CONSTRAINT fk_refresh_tokens_user FOREIGN KEY (user_id) REFERENCES usuarios(id) ON DELETE CASCADE,
+        INDEX idx_token_hash (token_hash),
+        INDEX idx_user_id_active (user_id, revoked_at)
+    ) ENGINE=InnoDB
+    `,
+];
+
 const CHAT_SCHEMA_STATEMENTS = [
     `
     CREATE TABLE IF NOT EXISTS candidate_context_snapshot (
@@ -188,6 +205,10 @@ async function runStatementSafely(statement) {
 export async function ensureProfileSchema() {
     for (const statement of PROFILE_SCHEMA_STATEMENTS) {
         await runStatementSafely(statement);
+    }
+
+    for (const statement of AUTH_SCHEMA_STATEMENTS) {
+        await pool.query(statement);
     }
 
     for (const statement of CHAT_SCHEMA_STATEMENTS) {

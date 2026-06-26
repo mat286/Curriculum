@@ -11,8 +11,14 @@ export default function ProfileSection({
   actions,
 }) {
   return (
-    <section id={`section-${sectionKey}`} className="section">
-      <button type="button" className="section-title" onClick={onToggle}>
+    <section id={`section-${sectionKey}`} className={`section ${isOpen ? "is-open" : ""}`}>
+      <button
+        type="button"
+        className="section-title"
+        onClick={onToggle}
+        aria-expanded={isOpen}
+        aria-controls={`section-content-${sectionKey}`}
+      >
         <span>
           <span className="section-label">{title}</span>
           {hint && <span className="section-hint">{hint}</span>}
@@ -27,7 +33,11 @@ export default function ProfileSection({
         </span>
       </button>
 
-      {isOpen && <div className="section-content">{children}</div>}
+      {isOpen && (
+        <div id={`section-content-${sectionKey}`} className="section-content">
+          {children}
+        </div>
+      )}
     </section>
   );
 }

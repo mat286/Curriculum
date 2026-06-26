@@ -109,4 +109,43 @@ describe('HybridSearchService', () => {
         expect(result.stats.semanticCount).toBeGreaterThanOrEqual(0);
         expect(result.stats.durationMs).toBeGreaterThanOrEqual(0);
     });
+
+    it('aplica filtros por includeSections y queryType en BM25', () => {
+        const profileContext = {
+            habilidades: [{ nombre: 'Node.js' }],
+            experiencia_laboral: [{ descripcion: 'APIs y servicios backend' }],
+            educacion: [{ institucion: 'Universidad X' }],
+        };
+
+        const result = service.search({
+            query: 'Node.js',
+            profileContext,
+            semanticResults: [],
+            includeSections: ['habilidades'],
+            queryType: 'fact',
+            candidateId: 'test-123',
+            requestId: 'req-789',
+        });
+
+        const hasOnlyAllowed = result.details.every((item) =>
+            ['habilidades', 'semantic'].includes(item.source),
+        );
+
+        expect(hasOnlyAllowed).toBe(true);
+        expect(result.stats.queryType).toBe('fact');
+    });
+
+    it('deduplica por similitud textual usando threshold configurable', () => {
+        process.env.HYBRID_DEDUPE_THRESHOLD = '0.5';
+        const strictService = new HybridSearchService();
+
+        const deduped = strictService._deduplicateResults([
+            { text: 'Node.js backend con microservicios y tracing', finalScore: 0.8, source: 'semantic' },
+            { text: 'Microservicios backend en Node.js con tracing', finalScore: 0.9, source: 'semantic' },
+            { text: 'React frontend con TypeScript', finalScore: 0.7, source: 'semantic' },
+        ]);
+
+        expect(deduped.length).toBeLessThanOrEqual(2);
+        delete process.env.HYBRID_DEDUPE_THRESHOLD;
+    });
 });

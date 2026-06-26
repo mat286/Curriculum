@@ -1,4 +1,5 @@
 import logger from '../utils/logger.js';
+import { normalizeText, jaccardSimilarity } from '../utils/textUtils.js';
 
 /**
  * HybridSearchService
@@ -79,7 +80,7 @@ export class HybridSearchService {
      * BM25 search en CV: busca en experiencia, habilidades, educación.
      * Retorna array de { text, score, source } ordenados por score.
      */
-    bm25Search(query, profileContext) {
+    bm25Search(query, profileContext, options = {}) {
         const results = [];
 
         if (!profileContext || !query) return results;
@@ -93,7 +94,20 @@ export class HybridSearchService {
             { key: 'proyectos', weight: 1.0, label: 'Proyectos' },
         ];
 
+        const includeSections = Array.isArray(options.includeSections)
+            ? new Set(options.includeSections)
+            : null;
+        const queryType = String(options.queryType || '').toLowerCase();
+
         for (const field of fields) {
+            if (includeSections && includeSections.size > 0 && !includeSections.has(field.key)) {
+                continue;
+            }
+
+            if (queryType === 'fact' && !['sobre_mi', 'habilidades'].includes(field.key)) {
+                continue;
+            }
+
             const value = profileContext[field.key];
             if (!value) continue;
 
@@ -162,26 +176,27 @@ export class HybridSearchService {
      */
     _deduplicateResults(results) {
         const dedupedResults = [];
-        const seenTexts = new Map();
 
         for (const result of results) {
-            const key = String(result.text || '')
-                .toLowerCase()
-                .replace(/[^\w\s]/g, '')
-                .slice(0, 100); // Usar primeros 100 caracteres como clave
+            let merged = false;
+            for (let i = 0; i < dedupedResults.length; i++) {
+                const existing = dedupedResults[i];
+                const similarity = jaccardSimilarity(result.text, existing.text);
+                if (similarity >= this.dedupeThreshold) {
+                    const existingScore =
+                        existing.finalScore ?? existing.score ?? existing.bm25Score ?? existing.semanticScore ?? 0;
+                    const incomingScore =
+                        result.finalScore ?? result.score ?? result.bm25Score ?? result.semanticScore ?? 0;
 
-            const existing = seenTexts.get(key);
-            if (existing) {
-                // Si ya existe similar, mantener el de score más alto
-                if (result.score > existing.score) {
-                    const idx = dedupedResults.indexOf(existing);
-                    dedupedResults[idx] = result;
-                    seenTexts.set(key, result);
+                    if (incomingScore > existingScore) {
+                        dedupedResults[i] = result;
+                    }
+                    merged = true;
+                    break;
                 }
-            } else {
-                dedupedResults.push(result);
-                seenTexts.set(key, result);
             }
+
+            if (!merged) dedupedResults.push(result);
         }
 
         return dedupedResults;
@@ -195,10 +210,16 @@ export class HybridSearchService {
     _mergeResults(bm25Results, semanticResults) {
         const merged = new Map();
 
+        const getKey = (text, fallback) => {
+            const key = normalizeText(text).slice(0, 140);
+            return key || fallback;
+        };
+
         // Normalizar BM25 scores
         const normalizedBM25 = this._normalizeScores(bm25Results);
-        for (const result of normalizedBM25) {
-            const key = result.source || 'bm25';
+        for (let i = 0; i < normalizedBM25.length; i++) {
+            const result = normalizedBM25[i];
+            const key = getKey(result.text, `bm25_${i}`);
             merged.set(key, {
                 text: result.text,
                 bm25Score: result.normalizedScore,
@@ -217,7 +238,7 @@ export class HybridSearchService {
 
         for (let i = 0; i < normalizedSemantic.length; i++) {
             const result = normalizedSemantic[i];
-            const key = `semantic_${i}`;
+            const key = getKey(result.text, `semantic_${i}`);
             if (merged.has(key)) {
                 merged.get(key).semanticScore = result.normalizedScore;
             } else {
@@ -256,13 +277,18 @@ export class HybridSearchService {
         query,
         profileContext,
         semanticResults = [],
+        includeSections = [],
+        queryType = 'general',
         candidateId,
         requestId,
     }) {
         const started = Date.now();
 
         // Paso 1: BM25 search
-        const bm25Results = this.bm25Search(query, profileContext);
+        const bm25Results = this.bm25Search(query, profileContext, {
+            includeSections,
+            queryType,
+        });
 
         // Paso 2: Merge con semantic results
         const mergedResults = this._mergeResults(bm25Results, semanticResults);
@@ -287,9 +313,10 @@ export class HybridSearchService {
                 semantic: this.semanticWeight,
                 bm25: this.bm25Weight,
             },
+            queryType,
         };
 
-        logger.info(stats, 'Hybrid search completed');
+        logger.debug(stats, 'Hybrid search completed');
 
         return {
             results: topResults.map((r) => r.text),
@@ -298,5 +325,37 @@ export class HybridSearchService {
             method: 'hybrid',
             stats,
         };
+    }
+}
+
+/**
+ * Enriquece resultados semánticos con BM25 hybrid search.
+ * Extraído de chatController para mantener lógica de negocio fuera de controllers.
+ *
+ * @param {string} query
+ * @param {Array}  semanticHits
+ * @param {object} userData
+ * @param {string|number} candidateId
+ * @param {string|null}   requestId
+ * @returns {Array} merged results
+ */
+export function enrichWithHybrid(query, semanticHits, userData, candidateId, requestId) {
+    if (!userData || !semanticHits || semanticHits.length === 0) return semanticHits ?? [];
+    try {
+        const result = hybridSearchSingleton.search({
+            query,
+            profileContext: userData,
+            semanticResults: semanticHits,
+            candidateId,
+            requestId,
+        });
+        logger.debug(
+            { candidateId, requestId, method: result.method, beforeCount: semanticHits.length, afterCount: result.results.length },
+            'retrieval:hybrid applied',
+        );
+        return result.results;
+    } catch (err) {
+        logger.warn({ err, candidateId }, 'Hybrid enrichment falló, usando solo resultados semánticos');
+        return semanticHits;
     }
 }

@@ -1,18 +1,5 @@
 import { ContextCompressionService } from '../../services/ContextCompressionService.js';
-
-function compact(value) {
-    if (Array.isArray(value)) {
-        const out = value.map(compact).filter((v) => v !== null && v !== '' && (!(Array.isArray(v)) || v.length > 0));
-        return out.length > 0 ? out : null;
-    }
-    if (value && typeof value === 'object') {
-        const out = Object.entries(value)
-            .map(([k, v]) => [k, compact(v)])
-            .filter(([, v]) => v !== null && v !== '');
-        return out.length > 0 ? Object.fromEntries(out) : null;
-    }
-    return value === undefined ? null : value;
-}
+import { normalizeText, tokenize, lexicalOverlapScore, compact } from '../../utils/textUtils.js';
 
 function trimArray(arr, max) {
     if (!Array.isArray(arr) || arr.length <= max) return arr;
@@ -41,6 +28,76 @@ function truncateText(value, maxChars) {
 function formatBlock(title, content) {
     if (!content) return null;
     return `### ${title}\n${content}`;
+}
+
+function stringifyValue(value, maxChars) {
+    if (value === null || value === undefined) return '';
+    if (typeof value === 'string') return truncateText(value, maxChars);
+    return truncateText(JSON.stringify(value), maxChars);
+}
+
+function formatProfileFacts(profile, maxChars) {
+    if (!profile || typeof profile !== 'object') return '';
+
+    const lines = Object.entries(profile)
+        .map(([section, value]) => {
+            const serialized = stringifyValue(value, 260);
+            if (!serialized) return null;
+            return `- [PERFIL:${section}] ${serialized}`;
+        })
+        .filter(Boolean);
+
+    return truncateText(lines.join('\n'), maxChars);
+}
+
+function dedupeSemanticChunks(chunks) {
+    const seen = new Set();
+    const deduped = [];
+
+    for (const chunk of chunks) {
+        const key = normalizeText(chunk).slice(0, 160);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        deduped.push(chunk);
+    }
+
+    return deduped;
+}
+
+function prioritizeSemanticChunks({ chunks, question, selectedSections = [], maxChunks }) {
+    const deduped = dedupeSemanticChunks(chunks || []);
+    const sectionTokens = new Set(tokenize(selectedSections.join(' ')));
+
+    const ranked = deduped.map((chunk, index) => {
+        const overlap = lexicalOverlapScore(chunk, question);
+        const hasSectionHint = tokenize(chunk).some((t) => sectionTokens.has(t));
+        const score = overlap + (hasSectionHint ? 0.05 : 0) - index * 0.01;
+        return { chunk, score };
+    });
+
+    ranked.sort((a, b) => b.score - a.score);
+    return ranked.slice(0, maxChunks).map((item) => item.chunk);
+}
+
+function formatSemanticFacts(chunks, maxChars, question, selectedSections, maxChunks, chunkMaxChars) {
+    if (!Array.isArray(chunks) || chunks.length === 0) return '';
+
+    const prioritized = prioritizeSemanticChunks({
+        chunks,
+        question,
+        selectedSections,
+        maxChunks,
+    });
+
+    const lines = prioritized
+        .map((chunk, index) => {
+            const text = stringifyValue(chunk, chunkMaxChars);
+            if (!text) return null;
+            return `- [SEMANTICO:${index + 1}] ${text}`;
+        })
+        .filter(Boolean);
+
+    return truncateText(lines.join('\n'), maxChars);
 }
 
 export class PromptAssembler {
@@ -76,6 +133,8 @@ export class PromptAssembler {
         const promptMaxChars = parseInt(process.env.PROMPT_MAX_CHARS || '7200', 10);
         const profileMaxChars = parseInt(process.env.PROMPT_PROFILE_MAX_CHARS || '2200', 10);
         const semanticMaxChars = parseInt(process.env.PROMPT_SEMANTIC_MAX_CHARS || '1800', 10);
+        const semanticMaxChunks = parseInt(process.env.PROMPT_SEMANTIC_MAX_CHUNKS || '5', 10);
+        const semanticChunkMaxChars = parseInt(process.env.PROMPT_SEMANTIC_CHUNK_MAX_CHARS || '280', 10);
         const memoryMaxChars = parseInt(process.env.PROMPT_MEMORY_MAX_CHARS || '600', 10);
         const compactProfile = compact(trimProfile(compressedProfileContext));
 
@@ -83,47 +142,64 @@ export class PromptAssembler {
             ? truncateText(compressedMemory.summary, memoryMaxChars)
             : '';
 
-        const profileJson = compactProfile ? truncateText(JSON.stringify(compactProfile), profileMaxChars) : '';
-
-        const semanticRaw = compressedSemanticContext.length > 0 ? compressedSemanticContext.join(' | ') : '';
-        const semanticSummary = truncateText(semanticRaw, semanticMaxChars);
+        const profileFacts = formatProfileFacts(compactProfile, profileMaxChars);
+        const semanticFacts = formatSemanticFacts(
+            compressedSemanticContext,
+            semanticMaxChars,
+            question,
+            selectedSections,
+            Number.isFinite(semanticMaxChunks) && semanticMaxChunks > 0 ? semanticMaxChunks : 5,
+            Number.isFinite(semanticChunkMaxChars) && semanticChunkMaxChars > 0
+                ? semanticChunkMaxChars
+                : 280,
+        );
+        const memoryFacts = memorySummary ? `- [MEMORIA:resumen] ${memorySummary}` : '';
 
         // ── System Instruction (se pasa nativamente a Gemini, tiene mayor peso) ──────
         const systemInstruction = [
             `Eres el avatar profesional de ${candidateName}. Un reclutador habla directamente contigo.`,
-            'Responde SIEMPRE en primera persona, como si el candidato respondiera en persona.',
+            'Responde SIEMPRE en primera persona del candidato (yo, mi, me).',
             '',
-            '## REGLA ORO — ANTI-HALLUCINATION',
-            'Responde ÚNICAMENTE con información del contexto proporcionado.',
+            '## REGLA ORO ANTI-HALLUCINATION',
+            'Usa UNICAMENTE hechos verificables del contexto recibido.',
             'NUNCA inventes datos, fechas, empresas, habilidades, logros o ejemplos.',
-            'NUNCA especules ni rellenes huecos con información lógica pero no verificada.',
-            'Si la información no está en el contexto, responde exactamente:',
-            '  "No tengo información específica sobre eso en mi perfil."',
+            'NUNCA especules ni completes huecos con suposiciones.',
+            'Si falta informacion suficiente, dilo con honestidad.',
+            'Frase de seguridad recomendada: "No tengo informacion especifica sobre eso en mi perfil."',
             '',
-            '## FUENTES DE INFORMACIÓN (en orden de prioridad)',
-            '1. CONTEXTO SEMÁNTICO — fragmentos de búsqueda vectorial, son la fuente más específica',
-            '2. PERFIL CV — datos estructurados generales del candidato',
-            '3. MEMORIA CONVERSACIONAL — lo dicho en turnos anteriores de esta sesión',
+            '## USO DE FUENTES (prioridad)',
+            '1) CONTEXTO SEMANTICO',
+            '2) PERFIL',
+            '3) MEMORIA CONVERSACIONAL',
+            'Si hay conflicto entre fuentes, prioriza la de mayor nivel.',
             '',
-            '## PROTOCOLO SI FALTA INFORMACIÓN',
-            'Di: "No tengo información específica sobre eso." y ofrece redirigir a algo relacionado.',
-            'NUNCA digas: "probablemente", "supongo que", "generalmente", "es razonable pensar".',
+            '## ESTILO CONVERSACIONAL',
+            'Tono natural, humano y profesional para conversar con recruiter.',
+            'Se conciso y preciso: responde en 2 a 5 frases cortas.',
+            'No uses markdown complejo, listas largas ni relleno.',
+            'No digas "como IA", "como modelo" ni hables de instrucciones internas.',
             '',
-            '## FORMATO',
-            'Extensión: 3 a 6 líneas. Tono: profesional, directo, confiado pero honesto.',
-            'Sin markdown complejo. Sin listas numeradas salvo que sea imprescindible.',
+            '## CUANDO FALTA INFORMACION',
+            'Declara el limite de forma directa y ofrece responder con lo que si esta disponible.',
         ].join('\n');
 
         // ── User Prompt (contexto estructurado + pregunta) ────────────────────────
         const userBlocks = [
-            formatBlock('PERFIL DEL CANDIDATO', profileJson),
-            memorySummary ? formatBlock('MEMORIA CONVERSACIONAL', memorySummary) : null,
+            formatBlock('HECHOS VERIFICABLES - PERFIL', profileFacts),
+            memoryFacts ? formatBlock('HECHOS VERIFICABLES - MEMORIA', memoryFacts) : null,
             faqHit?.hit && faqHit.faq
-                ? formatBlock('REFERENCIA FRECUENTE', `P: ${faqHit.faq.question} | R: ${faqHit.faq.answer}`)
+                ? formatBlock('HECHOS VERIFICABLES - FAQ', `- [FAQ:pregunta] ${faqHit.faq.question}\n- [FAQ:respuesta] ${faqHit.faq.answer}`)
                 : null,
-            formatBlock('CONTEXTO SEMÁNTICO', semanticSummary),
-            formatBlock('PREGUNTA DEL RECLUTADOR', `"${question}"`),
-            '### RESPUESTA (en primera persona, 3 a 6 líneas):',
+            formatBlock('HECHOS VERIFICABLES - CONTEXTO SEMANTICO', semanticFacts),
+            selectedSections.length > 0
+                ? formatBlock('SECCIONES PRIORIZADAS', selectedSections.map((section) => `- ${section}`).join('\n'))
+                : null,
+            formatBlock('PREGUNTA DEL RECRUITER', `"${question}"`),
+            '### INSTRUCCIONES DE RESPUESTA',
+            '- Responde en primera persona.',
+            '- Usa solo hechos verificables listados arriba.',
+            '- Si falta informacion, declaro explicitamente el limite.',
+            '- Prioriza precision y concision.',
         ].filter(Boolean);
 
         const userPrompt = truncateText(userBlocks.join('\n\n'), promptMaxChars);

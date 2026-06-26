@@ -1,4 +1,5 @@
 import logger from '../utils/logger.js';
+import { cosineSimilarity as computeCosineSimilarity, toTokenSet } from '../utils/textUtils.js';
 
 /**
  * ReRankingService
@@ -27,17 +28,6 @@ export class ReRankingService {
      * Calcula similitud coseno entre dos vectores de embeddings.
      * Usa producto punto normalizado.
      */
-    _cosineSimilarity(vecA, vecB) {
-        if (!vecA || !vecB || vecA.length !== vecB.length) return 0;
-
-        const dotProduct = vecA.reduce((sum, a, i) => sum + a * vecB[i], 0);
-        const magnitudeA = Math.sqrt(vecA.reduce((sum, a) => sum + a * a, 0));
-        const magnitudeB = Math.sqrt(vecB.reduce((sum, b) => sum + b * b, 0));
-
-        if (magnitudeA === 0 || magnitudeB === 0) return 0;
-        return dotProduct / (magnitudeA * magnitudeB);
-    }
-
     /**
      * Calcula puntuación de relevancia basada en:
      * - Similitud semántica entre result y question
@@ -57,21 +47,12 @@ export class ReRankingService {
 
         // Componente 1: Similitud semántica directa (peso 70%)
         if (resultEmbedding && questionEmbedding) {
-            const similarity = this._cosineSimilarity(resultEmbedding, questionEmbedding);
+            const similarity = computeCosineSimilarity(resultEmbedding, questionEmbedding);
             score += similarity * 0.7;
         } else {
             // Fallback: similitud textual simple
-            const queryTerms = new Set(
-                String(question || '')
-                    .toLowerCase()
-                    .split(/\s+/)
-                    .filter((w) => w.length > 2),
-            );
-            const resultTerms = String(resultText || '')
-                .toLowerCase()
-                .split(/\s+/)
-                .filter((w) => w.length > 2);
-
+            const queryTerms = toTokenSet(question);
+            const resultTerms = Array.from(toTokenSet(resultText));
             const matches = resultTerms.filter((t) => queryTerms.has(t)).length;
             const textSimilarity = matches / Math.max(queryTerms.size, resultTerms.length, 1);
             score += textSimilarity * 0.7;
@@ -79,7 +60,7 @@ export class ReRankingService {
 
         // Componente 2: Contexto (si existe) - peso 20%
         if (contextEmbedding && resultEmbedding) {
-            const contextSimilarity = this._cosineSimilarity(resultEmbedding, contextEmbedding);
+            const contextSimilarity = computeCosineSimilarity(resultEmbedding, contextEmbedding);
             score += contextSimilarity * 0.2;
         }
 
@@ -193,7 +174,7 @@ export class ReRankingService {
             filterStats,
         };
 
-        logger.info(stats, 'Re-ranking completed');
+        logger.debug(stats, 'Re-ranking completed');
 
         return {
             rankedResults: topResults,

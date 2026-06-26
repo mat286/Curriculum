@@ -2,34 +2,16 @@ import { createCache } from '../../utils/chatHelpers.js';
 import logger from '../../utils/logger.js';
 import { FAQService } from './FAQService.js';
 import { FAQEmbeddingService } from './FAQEmbeddingService.js';
-
-function cosineSimilarity(a, b) {
-    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length || a.length === 0) return 0;
-
-    let dot = 0;
-    let normA = 0;
-    let normB = 0;
-    for (let i = 0; i < a.length; i++) {
-        dot += a[i] * b[i];
-        normA += a[i] * a[i];
-        normB += b[i] * b[i];
-    }
-
-    const den = Math.sqrt(normA) * Math.sqrt(normB);
-    if (!den) return 0;
-    return dot / den;
-}
+import { cosineSimilarity, toTokenSet } from '../../utils/textUtils.js';
 
 function lexicalOverlapBoost(query, faqQuestion) {
-    const qTokens = new Set((query || '').toLowerCase().match(/[a-z0-9]{3,}/g) || []);
-    const fTokens = new Set((faqQuestion || '').toLowerCase().match(/[a-z0-9]{3,}/g) || []);
+    const qTokens = toTokenSet(query);
+    const fTokens = toTokenSet(faqQuestion);
     if (!qTokens.size || !fTokens.size) return 0;
-
     let overlap = 0;
     for (const token of qTokens) {
         if (fTokens.has(token)) overlap += 1;
     }
-
     const ratio = overlap / Math.max(1, qTokens.size);
     if (ratio >= 0.5) return 0.05;
     if (ratio >= 0.3) return 0.03;

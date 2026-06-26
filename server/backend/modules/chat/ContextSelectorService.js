@@ -14,13 +14,54 @@ const INTENT_SECTION_MAP = {
     general: ['sobre_mi', 'experiencia_laboral', 'habilidades', 'proyectos', 'educacion', 'idiomas', 'usuario'],
 };
 
+const INTENT_QUERY_TYPE_MAP = {
+    work_experience: 'detail',
+    education: 'detail',
+    skills: 'detail',
+    projects: 'detail',
+    technologies: 'detail',
+    languages: 'fact',
+    contact: 'fact',
+    social: 'fact',
+    availability: 'fact',
+    summary: 'general',
+    personal: 'fact',
+    faq_candidate: 'fact',
+    general: 'general',
+};
+
+function unique(values) {
+    return [...new Set(values)];
+}
+
 export class ContextSelectorService {
-    select(intent, confidence = 0.6) {
-        const include = INTENT_SECTION_MAP[intent] || INTENT_SECTION_MAP.general;
-        if (confidence < 0.7 && intent !== 'general') {
-            return { include: [...new Set([...include, 'sobre_mi'])] };
+    select(intent, confidence = 0.6, question = '') {
+        const resolvedIntent = intent || 'general';
+        const include = INTENT_SECTION_MAP[resolvedIntent] || INTENT_SECTION_MAP.general;
+
+        let finalInclude = include.slice();
+        if (confidence < 0.7 && resolvedIntent !== 'general') {
+            finalInclude = unique([...finalInclude, 'sobre_mi']);
         }
-        return { include: include.slice() };
+
+        // Para preguntas muy precisas y alta confianza reducimos ruido contextual.
+        const looksSpecific = String(question || '').trim().split(/\s+/).length <= 8;
+        if (confidence >= 0.9 && resolvedIntent !== 'general' && looksSpecific) {
+            finalInclude = finalInclude.slice(0, 2);
+        }
+
+        const queryType = INTENT_QUERY_TYPE_MAP[resolvedIntent] || 'general';
+        const minSimilarityBoost =
+            queryType === 'fact' ? 0.06 : queryType === 'detail' ? 0.03 : 0;
+
+        return {
+            include: finalInclude,
+            retrievalPolicy: {
+                queryType,
+                minSimilarityBoost,
+                sectionPriority: finalInclude.slice(),
+            },
+        };
     }
 
     pickFromProfile(profile, includeSections) {

@@ -1,7 +1,13 @@
 import React from "react";
 import { Link } from "react-router-dom";
 
-export default function ProfileSidebar({ profile, completion, sections, onJumpToSection }) {
+const statusLabel = {
+  done: "Completo",
+  partial: "En progreso",
+  empty: "Pendiente",
+};
+
+export default function ProfileSidebar({ profile, completion, sections, activeSection, onJumpToSection }) {
   const fullName = [profile?.nombre, profile?.apellido].filter(Boolean).join(" ").trim() || "Tu perfil";
   const role = profile?.resumen || profile?.puestoActual || "Perfil profesional en construcción";
   const topSkills = (profile?.habilidades || []).slice(0, 4);
@@ -45,8 +51,18 @@ export default function ProfileSidebar({ profile, completion, sections, onJumpTo
         <h4>Ir a sección</h4>
         <div className="profile-nav-list">
           {sections.map((section) => (
-            <button key={section.key} type="button" onClick={() => onJumpToSection(section.key)}>
-              {section.label}
+            <button
+              key={section.key}
+              type="button"
+              className={activeSection === section.key ? "is-active" : ""}
+              aria-current={activeSection === section.key ? "true" : undefined}
+              onClick={() => onJumpToSection(section.key)}
+            >
+              <span>{section.label}</span>
+              <small>{statusLabel[section.state] || "Pendiente"}</small>
+              <div className="profile-nav-mini-track" aria-hidden="true">
+                <span style={{ width: `${section.progress || 0}%` }} />
+              </div>
             </button>
           ))}
         </div>

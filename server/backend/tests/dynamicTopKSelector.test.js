@@ -68,18 +68,20 @@ describe('DynamicTopKSelector', () => {
         expect(result.decision).toBe('disable-rag');
     });
 
-    it('debería evaluar confidence desde múltiples señales', () => {
-        const confidenceData = selector.evaluateConfidence({
+    it('debería retornar confidenceScore válido en selectTopK', () => {
+        // evaluateConfidence fue eliminado (señales muertas); confidenceScore se expone en selectTopK
+        const result = selector.selectTopK({
             intentConfidence: 0.8,
-            semanticSimilarities: [0.9, 0.85, 0.8],
             questionLength: 50,
-            historicalHitRate: 0.75,
+            intent: 'general',
+            candidateId: 'test-123',
+            requestId: 'req-456',
         });
 
-        expect(confidenceData.confidenceScore).toBeGreaterThan(0);
-        expect(confidenceData.confidenceScore).toBeLessThanOrEqual(1);
-        expect(confidenceData.intentSignal).toBeDefined();
-        expect(confidenceData.semanticSignal).toBeDefined();
+        expect(result.confidenceScore).toBeGreaterThan(0);
+        expect(result.confidenceScore).toBeLessThanOrEqual(1);
+        expect(result.topK).toBeDefined();
+        expect(result.decision).toBeDefined();
     });
 
     it('debería aplicar override via ENV', () => {
@@ -97,5 +99,22 @@ describe('DynamicTopKSelector', () => {
 
         expect(effective).toBe(7);
         delete process.env.SEMANTIC_TOPK_OVERRIDE;
+    });
+
+    it('aplica ajuste de top-k por intención configurable', () => {
+        process.env.SEMANTIC_TOPK_INTENT_BONUS = JSON.stringify({ technologies: 2 });
+        const tunedSelector = new DynamicTopKSelector();
+
+        const result = tunedSelector.selectTopK({
+            intentConfidence: 0.75,
+            semanticSimilarities: [0.7],
+            questionLength: 40,
+            intent: 'technologies',
+            candidateId: 'test-123',
+            requestId: 'req-456',
+        });
+
+        expect(result.topK).toBeGreaterThanOrEqual(4);
+        delete process.env.SEMANTIC_TOPK_INTENT_BONUS;
     });
 });

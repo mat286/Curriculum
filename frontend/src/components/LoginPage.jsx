@@ -69,40 +69,60 @@ export default function LoginPage() {
     return (
         <div className="login-container">
             <div className="login-card">
-                <span className="app-eyebrow">Acceso seguro</span>
-                <h1>Entra a tu demo profesional</h1>
-                <p>
-                    Inicia sesión con Google para cargar tu perfil, conversar con tu IA y mostrar una experiencia distinta a un CV tradicional.
-                </p>
+                <header className="login-header">
+                    <span className="app-eyebrow">Acceso seguro</span>
+                    <h1>Inicia tu entrevista virtual</h1>
+                    <p>
+                        Entra con tu cuenta de Google para abrir tu perfil profesional, conversar con tu asistente y compartir tu CV interactivo.
+                    </p>
+                </header>
 
-                <div className="login-benefits">
-                    <span>✨ Perfil recruiter-ready</span>
-                    <span>💬 Chat en primera persona</span>
-                    <span>📄 CV interactivo</span>
+                <section className="login-steps" aria-label="Pasos para comenzar">
+                    <h2>Como funciona</h2>
+                    <ol>
+                        <li>Inicia sesion con Google</li>
+                        <li>Completa tu perfil en pocos minutos</li>
+                        <li>Comparte tu demo con recruiters</li>
+                    </ol>
+                </section>
+
+                <div className="login-benefits" aria-label="Beneficios principales">
+                    <span className="benefit-pill">Perfil recruiter-ready</span>
+                    <span className="benefit-pill">Chat en primera persona</span>
+                    <span className="benefit-pill">CV interactivo</span>
                 </div>
 
-                {error && <div className="error-message">{error}</div>}
+                {error && (
+                    <div className="error-message" role="alert" aria-live="assertive">
+                        {error}
+                    </div>
+                )}
 
                 {!clientIdConfigured && <GoogleClientIdChecker />}
 
                 {clientIdConfigured && (
                     <>
-                        <div className="login-button-container">
+                        <div className="login-button-container" aria-label="Accion principal de inicio de sesion">
+                            <p className="login-button-title">Continuar con Google</p>
                             <GoogleLogin onSuccess={handleSuccess} onError={handleError} disabled={loading} />
                         </div>
 
                         <div className="login-helper-copy">
-                            <strong>Qué pasa después</strong>
+                            <strong>Que pasa despues</strong>
                             <ul>
-                                <li>Completas tu perfil profesional</li>
-                                <li>Abres tu demo conversacional</li>
-                                <li>Compartes una experiencia mucho más clara con recruiters</li>
+                                <li>Acceso seguro sin contraseñas nuevas</li>
+                                <li>Tu informacion queda asociada a tu cuenta</li>
+                                <li>Puedes continuar luego donde te quedaste</li>
                             </ul>
                         </div>
                     </>
                 )}
 
-                {loading && <p className="loading-text">Iniciando sesión...</p>}
+                {loading && (
+                    <p className="loading-text" role="status" aria-live="polite">
+                        Iniciando sesion...
+                    </p>
+                )}
             </div>
         </div>
     );

@@ -1,16 +1,7 @@
 import { getOrCreateCollection } from '../../config/chroma.js';
 import { getEmbedding } from '../../services/ollamaService.js';
 import logger from '../../utils/logger.js';
-
-function withTimeout(promise, ms, fallback) {
-    let timer;
-    return Promise.race([
-        promise,
-        new Promise((resolve) => {
-            timer = setTimeout(() => resolve(fallback), ms);
-        }),
-    ]).finally(() => clearTimeout(timer));
-}
+import { withTimeout } from '../../utils/chatHelpers.js';
 
 export class SemanticSearchService {
     constructor(cacheService) {

@@ -1,22 +1,5 @@
 import { pool } from '../../config/db.js';
-
-function compact(value) {
-    if (Array.isArray(value)) {
-        const out = value
-            .map(compact)
-            .filter((v) => v !== null && v !== '' && (!(Array.isArray(v)) || v.length > 0));
-        return out.length > 0 ? out : null;
-    }
-
-    if (value && typeof value === 'object') {
-        const out = Object.entries(value)
-            .map(([k, v]) => [k, compact(v)])
-            .filter(([, v]) => v !== null && v !== '');
-        return out.length > 0 ? Object.fromEntries(out) : null;
-    }
-
-    return value === undefined ? null : value;
-}
+import { compact } from '../../utils/textUtils.js';
 
 function buildCompiledContext(profile) {
     const user = profile?.usuario || {};

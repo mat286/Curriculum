@@ -9,16 +9,15 @@ describe('ReRankingService', () => {
         process.env.ENABLE_RERANKING = 'true';
     });
 
-    it('debería calcular similitud coseno correctamente', () => {
+    it('debería calcular similitud coseno correctamente (vía textUtils)', async () => {
+        // _cosineSimilarity eliminado en refactor; la función está en utils/textUtils.js
+        const { cosineSimilarity } = await import('../utils/textUtils.js');
         const vec1 = [1, 0, 0];
         const vec2 = [1, 0, 0];
         const vec3 = [0, 1, 0];
 
-        const sim1 = service._cosineSimilarity(vec1, vec2);
-        const sim2 = service._cosineSimilarity(vec1, vec3);
-
-        expect(sim1).toBeCloseTo(1.0);
-        expect(sim2).toBeCloseTo(0.0);
+        expect(cosineSimilarity(vec1, vec2)).toBeCloseTo(1.0);
+        expect(cosineSimilarity(vec1, vec3)).toBeCloseTo(0.0);
     });
 
     it('debería computar relevance score entre 0 y 1', () => {

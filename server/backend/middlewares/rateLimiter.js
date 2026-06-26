@@ -17,6 +17,22 @@ export const globalLimiter = rateLimit({
 });
 
 /**
+ * Limiter para tráfico autenticado en rutas sensibles.
+ * 120 req/min por userId, con fallback por IP si no hay usuario resuelto.
+ */
+export const authenticatedLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 120,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => req.user?.id ? `user:${req.user.id}` : `ip:${req.ip}`,
+    message: {
+        error: 'Demasiadas solicitudes',
+        message: 'Has excedido el límite de solicitudes autenticadas por minuto. Intenta de nuevo en un momento.',
+    },
+});
+
+/**
  * Limiter genérico para endpoints de chat con candidato.
  * 20 req/min por usuario autenticado o por IP.
  */

@@ -1,13 +1,13 @@
 import { Router } from 'express';
 import { autenticarUsuario } from '../middlewares/authMiddleware.js';
-import { chatLimiter } from '../middlewares/rateLimiter.js';
+import { authenticatedLimiter, chatLimiter } from '../middlewares/rateLimiter.js';
 import { askCandidate, askCandidateStream } from '../controllers/candidateChatController.js';
 
 const router = Router();
 
 // POST /api/chat/candidate/:id — chat con candidato (respuesta completa)
-router.post('/candidate/:id', autenticarUsuario, chatLimiter, askCandidate);
+router.post('/candidate/:id', autenticarUsuario, authenticatedLimiter, chatLimiter, askCandidate);
 // POST /api/chat/candidate/:id/stream — chat con candidato via SSE streaming
-router.post('/candidate/:id/stream', autenticarUsuario, chatLimiter, askCandidateStream);
+router.post('/candidate/:id/stream', autenticarUsuario, authenticatedLimiter, chatLimiter, askCandidateStream);
 
 export default router;
