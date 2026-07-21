@@ -79,6 +79,18 @@ describe('GeminiProvider', () => {
         expect(provider.isQuotaError({ message: 'Network error' })).toBe(false);
     });
 
+    it('isOverloadedError detecta status 503', () => {
+        expect(provider.isOverloadedError({ status: 503, message: 'algo' })).toBe(true);
+    });
+
+    it('isOverloadedError detecta mensaje de alta demanda de Google', () => {
+        expect(provider.isOverloadedError({ message: '[503 Service Unavailable] This model is currently experiencing high demand.' })).toBe(true);
+    });
+
+    it('isOverloadedError devuelve false para otros errores', () => {
+        expect(provider.isOverloadedError({ message: 'RESOURCE_EXHAUSTED' })).toBe(false);
+    });
+
     it('generate() produce texto con el cliente mockeado', async () => {
         const result = await provider.generate('Hola, ¿cómo estás?');
         expect(typeof result).toBe('string');

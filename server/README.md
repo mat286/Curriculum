@@ -3,9 +3,9 @@
 Esta carpeta contiene **todo lo que va del lado del servidor**:
 
 - **API REST** en Node.js / Express
-- **IA local** con Ollama
+- **IA conversacional** con Gemini (cloud)
+- **Embeddings / RAG** locales con Ollama (solo `nomic-embed-text`) + ChromaDB
 - **Base de datos** MySQL
-- **Embeddings / RAG** con ChromaDB
 - **Docker Compose** para levantar todo junto
 
 > El `frontend/` queda separado a propósito y se ejecuta aparte.
@@ -33,8 +33,8 @@ Es el corazón del sistema. Se encarga de:
 - exponer endpoints REST
 - decidir si una pregunta necesita o no consultar la base
 - consultar MySQL
-- buscar contexto semántico con embeddings
-- pedirle la respuesta final a Ollama
+- buscar contexto semántico con embeddings (Ollama + ChromaDB)
+- pedirle la respuesta final a Gemini
 
 ### `db/`
 Contiene `init.sql`, que crea las tablas del CV:
@@ -63,11 +63,10 @@ Archivo modelo para crear tu `.env` real con claves y configuración.
 
 ## Configuración recomendada de IA
 
-- **Conversacional:** `mistral:7b`
-- **Router:** `llama3.2:1b`
-- **Embeddings:** `nomic-embed-text`
+- **Conversacional:** Gemini (cloud, `AI_PROVIDER=gemini`, ver `GEMINI_MODEL` en `.env`)
+- **Embeddings:** `nomic-embed-text` (Ollama local, solo para RAG)
 
-Si el servidor tiene pocos recursos, puedes bajar temporalmente a `llama3.2:1b` también como modelo conversacional.
+Ollama en este proyecto **no** carga ningún modelo LLM (ni `mistral`, ni `llama3.2`) — únicamente sirve embeddings.
 
 ---
 
@@ -88,10 +87,8 @@ Después editá `.env` con tus valores reales.
 docker compose up -d
 ```
 
-### 3) Descargar modelos en Ollama
+### 3) Descargar el modelo de embeddings en Ollama
 ```powershell
-docker exec cv-ollama ollama pull mistral:7b
-docker exec cv-ollama ollama pull llama3.2:1b
 docker exec cv-ollama ollama pull nomic-embed-text
 ```
 
@@ -110,13 +107,13 @@ curl http://localhost:3000/health
 ## Flujo general del chat
 
 1. El usuario manda una pregunta al endpoint `POST /api/chat/ask`
-2. El **router LLM** decide:
+2. El **router** (clasificador de intención) decide:
    - si puede responder directo, o
    - si necesita datos del CV
 3. Si necesita datos:
    - consulta MySQL solo en las tablas necesarias
-   - complementa con búsqueda semántica en ChromaDB
-4. Se hace una segunda llamada a Ollama
+   - complementa con búsqueda semántica en ChromaDB (embeddings de Ollama)
+4. Se hace la llamada final a Gemini con el contexto armado
 5. La API devuelve la respuesta final como si hablara el candidato
 
 ---

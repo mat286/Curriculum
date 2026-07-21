@@ -71,6 +71,16 @@ export class GeminiProvider extends AIProvider {
     }
 
     /**
+     * Determina si el error es un 503 de sobrecarga temporal del modelo
+     * (distinto de la cuota 429: acá el servicio de Google está saturado).
+     */
+    isOverloadedError(error) {
+        if (error?.status === 503) return true;
+        const msg = String(error?.message || '');
+        return msg.includes('503') || msg.includes('Service Unavailable') || msg.includes('overloaded') || msg.includes('high demand');
+    }
+
+    /**
      * Genera texto libre con Gemini.
      */
     async generate(prompt, options = {}, systemInstruction = null) {
@@ -84,6 +94,10 @@ export class GeminiProvider extends AIProvider {
             generationConfig: {
                 temperature: options.temperature ?? 0.2,
                 maxOutputTokens: options.numPredict ?? 500,
+                // Modelos "thinking" (2.5+) consumen maxOutputTokens en razonamiento
+                // interno antes de generar texto visible, cortando la respuesta a
+                // mitad de frase. Lo desactivamos: no lo necesitamos para Q&A simple.
+                thinkingConfig: { thinkingBudget: 0 },
             },
         };
         if (systemInstruction) {
@@ -116,6 +130,12 @@ export class GeminiProvider extends AIProvider {
                 netErr.isNetworkError = true;
                 throw netErr;
             }
+            if (this.isOverloadedError(error)) {
+                logger.warn({ err: error.message }, '[Gemini] Modelo sobrecargado (503).');
+                const overloadErr = new LLMError(`[Gemini overloaded] ${error.message}`);
+                overloadErr.isOverloadedError = true;
+                throw overloadErr;
+            }
             logger.error({ err: error }, 'Error comunicando con Gemini');
             throw new LLMError(`Error al generar respuesta: ${error.message}`);
         }
@@ -136,6 +156,7 @@ export class GeminiProvider extends AIProvider {
                 responseMimeType: 'application/json',
                 temperature: options.temperature ?? 0,
                 maxOutputTokens: options.numPredict ?? 500,
+                thinkingConfig: { thinkingBudget: 0 },
             },
         });
 
@@ -151,7 +172,7 @@ export class GeminiProvider extends AIProvider {
             const text = result.response.text().trim();
             return JSON.parse(text);
         } catch (error) {
-            if (error instanceof LLMError && (error.isQuotaError || error.isNetworkError)) throw error;
+            if (error instanceof LLMError && (error.isQuotaError || error.isNetworkError || error.isOverloadedError)) throw error;
             if (this.isQuotaError(error)) {
                 const delay = parseRetryDelay(error.message);
                 this.activateQuotaCooldown(Math.max(delay + 5000, QUOTA_COOLDOWN_MS));
@@ -164,6 +185,12 @@ export class GeminiProvider extends AIProvider {
                 const netErr = new LLMError(`[Gemini network] ${error.message}`);
                 netErr.isNetworkError = true;
                 throw netErr;
+            }
+            if (this.isOverloadedError(error)) {
+                logger.warn({ err: error.message }, '[Gemini] Modelo sobrecargado (503) en generateJSON.');
+                const overloadErr = new LLMError(`[Gemini overloaded] ${error.message}`);
+                overloadErr.isOverloadedError = true;
+                throw overloadErr;
             }
             if (error instanceof LLMError) {
                 logger.warn({ err: error.message }, 'Gemini generateJSON timeout');
@@ -183,11 +210,16 @@ export class GeminiProvider extends AIProvider {
             throw new LLMError('El prompt no puede estar vacío');
         }
 
+        const timeout = options.timeout ?? GEMINI_TIMEOUT;
         const modelConfig = {
             model: GEMINI_MODEL,
             generationConfig: {
                 temperature: options.temperature ?? 0.2,
                 maxOutputTokens: options.numPredict ?? 500,
+                // Modelos "thinking" (2.5+) consumen maxOutputTokens en razonamiento
+                // interno antes de generar texto visible, cortando la respuesta a
+                // mitad de frase. Lo desactivamos: no lo necesitamos para Q&A simple.
+                thinkingConfig: { thinkingBudget: 0 },
             },
         };
         if (systemInstruction) {
@@ -195,8 +227,11 @@ export class GeminiProvider extends AIProvider {
         }
         const model = this._client.getGenerativeModel(modelConfig);
 
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeout);
+
         try {
-            const streamResult = await model.generateContentStream(prompt.trim());
+            const streamResult = await model.generateContentStream(prompt.trim(), { signal: controller.signal });
             let result = '';
 
             for await (const chunk of streamResult.stream) {
@@ -210,6 +245,9 @@ export class GeminiProvider extends AIProvider {
             return result.trim();
         } catch (error) {
             if (error instanceof LLMError) throw error;
+            if (controller.signal.aborted) {
+                throw new LLMError(`Gemini timeout después de ${timeout}ms`);
+            }
             if (this.isQuotaError(error)) {
                 const delay = parseRetryDelay(error.message);
                 this.activateQuotaCooldown(Math.max(delay + 5000, QUOTA_COOLDOWN_MS));
@@ -223,8 +261,16 @@ export class GeminiProvider extends AIProvider {
                 netErr.isNetworkError = true;
                 throw netErr;
             }
+            if (this.isOverloadedError(error)) {
+                logger.warn({ err: error.message }, '[Gemini] Modelo sobrecargado (503) en streaming.');
+                const overloadErr = new LLMError(`[Gemini overloaded] ${error.message}`);
+                overloadErr.isOverloadedError = true;
+                throw overloadErr;
+            }
             logger.error({ err: error }, 'Error en streaming con Gemini');
             throw new LLMError(`Error al generar respuesta streaming: ${error.message}`);
+        } finally {
+            clearTimeout(timer);
         }
     }
 

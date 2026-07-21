@@ -38,8 +38,8 @@ async function withGeminiRetry(fn, context = '') {
             throw new LLMError('El servicio de IA está temporalmente saturado. Intentalo en unos minutos.');
         }
 
-        // Timeout o red: reintentamos una vez
-        const isRetryable = firstErr.isNetworkError || firstErr.message?.includes('timeout');
+        // Timeout, red o 503 (sobrecarga temporal): reintentamos una vez
+        const isRetryable = firstErr.isNetworkError || firstErr.isOverloadedError || firstErr.message?.includes('timeout');
         if (!isRetryable) throw firstErr;
 
         logger.warn(`[Gemini${context}] Primer intento falló (${firstErr.message}). Reintentando en ${GEMINI_RETRY_DELAY_MS}ms…`);

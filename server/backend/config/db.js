@@ -6,6 +6,7 @@ const pool = mysql.createPool({
     user: process.env.DB_USER || 'app_user',
     password: process.env.DB_PASSWORD || '',
     database: process.env.DB_NAME || 'entrevistas_virtuales',
+    charset: 'utf8mb4',
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0,
