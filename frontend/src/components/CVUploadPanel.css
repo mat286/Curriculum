@@ -1,0 +1,75 @@
+.cv-upload-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    border-radius: 14px;
+    border: 1px solid var(--cp-border, #E5E7EB);
+    background: #F9FAFB;
+}
+
+.cv-upload-title {
+    margin: 0 0 2px;
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--cp-text, #111827);
+}
+
+.cv-upload-panel input[type="file"] {
+    font-size: 0.76rem;
+    color: var(--cp-text-secondary, #6B7280);
+}
+
+.cv-upload-or {
+    margin: 4px 0 0;
+    font-size: 0.72rem;
+    color: #9CA3AF;
+}
+
+.cv-upload-panel textarea {
+    resize: vertical;
+    border-radius: 10px;
+    border: 1px solid var(--cp-border, #E5E7EB);
+    background: #FFFFFF;
+    color: var(--cp-text, #111827);
+    font-size: 0.8rem;
+    padding: 8px 10px;
+    font-family: inherit;
+}
+
+.cv-upload-error {
+    margin: 0;
+    font-size: 0.78rem;
+    color: #DC2626;
+}
+
+.cv-upload-empty-result {
+    margin: 0;
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: #FFFFFF;
+    border: 1px dashed var(--cp-border, #E5E7EB);
+    font-size: 0.78rem;
+    color: var(--cp-text-secondary, #6B7280);
+    line-height: 1.5;
+}
+
+.cv-upload-analyze-btn {
+    align-self: flex-start;
+    border: none;
+    border-radius: 10px;
+    padding: 8px 16px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: #fff;
+    background: #111827;
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+.cv-upload-analyze-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+.cv-upload-analyze-btn:hover:not(:disabled) {
+    opacity: 0.85;
+}

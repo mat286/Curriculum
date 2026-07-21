@@ -664,6 +664,100 @@ export async function deleteProfileSectionItem(req, res, next) {
     }
 }
 
+const BASIC_FIELD_COLUMNS = {
+    nombre: 'nombre',
+    puestoActual: 'puesto_actual',
+    resumen: 'resumen',
+    objetivoProfesional: 'objetivo_profesional',
+    disponibilidad: 'disponibilidad',
+    modalidadPreferida: 'modalidad_preferida',
+    pretensionSalarial: 'pretension_salarial',
+    linkedinUrl: 'linkedin_url',
+    githubUrl: 'github_url',
+    portfolioUrl: 'portfolio_url',
+};
+
+/**
+ * POST /api/user/:id/profile-updates/confirm
+ * Guarda una propuesta de actualización de perfil ya confirmada por el usuario
+ * (viene del chat de autocompletado o de la carga de CV). Reusa exactamente el
+ * mismo CRUD por sección que createProfileSectionItem/updateProfileSectionItem
+ * — nunca hace un delete+reinsert masivo como updateProfile(), porque acá el
+ * payload puede traer solo un puñado de campos sueltos.
+ */
+export async function confirmProfileUpdates(req, res, next) {
+    try {
+        const userId = validateUserId(req.params.id, req.user.id);
+        const { basicFields, sections } = req.body || {};
+        const conn = await pool.getConnection();
+        const results = { basicFieldsUpdated: false, sections: [] };
+
+        try {
+            await conn.beginTransaction();
+
+            if (basicFields && typeof basicFields === 'object' && !Array.isArray(basicFields)) {
+                const setEntries = Object.entries(basicFields)
+                    .filter(([key]) => key !== 'sobreMi' && BASIC_FIELD_COLUMNS[key])
+                    .map(([key, value]) => [BASIC_FIELD_COLUMNS[key], normalizeNullableText(value)]);
+
+                if (setEntries.length > 0) {
+                    const setClause = setEntries.map(([column]) => `${column} = ?`).join(', ');
+                    const values = [...setEntries.map(([, value]) => value), userId];
+                    await conn.query(`UPDATE usuarios SET ${setClause} WHERE id = ?`, values);
+                    results.basicFieldsUpdated = true;
+                }
+
+                if (typeof basicFields.sobreMi === 'string' && basicFields.sobreMi.trim()) {
+                    await conn.query('DELETE FROM sobre_mi WHERE user_id = ?', [userId]);
+                    await conn.query('INSERT INTO sobre_mi (user_id, descripcion) VALUES (?, ?)', [userId, basicFields.sobreMi.trim()]);
+                    results.basicFieldsUpdated = true;
+                }
+            }
+
+            for (const op of (Array.isArray(sections) ? sections : [])) {
+                if (!op || typeof op !== 'object') throw new ValidationError('Operación de sección inválida');
+                const sectionKey = validateSectionKey(op.sectionKey);
+                const section = getSectionDefinition(sectionKey);
+
+                if (op.action === 'create') {
+                    const data = buildCreateSectionData(sectionKey, op.payload);
+                    const columns = ['user_id', ...section.columns];
+                    const placeholders = columns.map(() => '?').join(', ');
+                    const values = [userId, ...section.columns.map((column) => data[column] ?? null)];
+                    await conn.query(`INSERT INTO ${section.table} (${columns.join(', ')}) VALUES (${placeholders})`, values);
+                } else if (op.action === 'update') {
+                    const itemId = validateItemId(op.itemId);
+                    const [existingRows] = await conn.query(
+                        `SELECT * FROM ${section.table} WHERE id = ? AND user_id = ?`,
+                        [itemId, userId],
+                    );
+                    if (existingRows.length === 0) throw new NotFoundError('Item no encontrado');
+                    const data = buildUpdateSectionData(sectionKey, op.payload, existingRows[0]);
+                    const setClause = section.columns.map((column) => `${column} = ?`).join(', ');
+                    const values = [...section.columns.map((column) => data[column] ?? null), itemId, userId];
+                    await conn.query(`UPDATE ${section.table} SET ${setClause} WHERE id = ? AND user_id = ?`, values);
+                } else {
+                    throw new ValidationError('action inválida: debe ser "create" o "update"');
+                }
+
+                results.sections.push({ sectionKey, action: op.action });
+            }
+
+            await conn.commit();
+        } catch (error) {
+            await conn.rollback();
+            throw error;
+        } finally {
+            conn.release();
+        }
+
+        triggerProfileRefreshAndReindex(userId);
+        res.json({ success: true, ...results });
+    } catch (error) {
+        next(error);
+    }
+}
+
 /**
  * POST /api/user/:id/photo — Marca avance del paso de foto y opcionalmente guarda URL
  * Nota: para mantener compatibilidad sin dependencias extra, este endpoint no procesa binarios multipart.

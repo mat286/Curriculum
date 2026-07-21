@@ -41,6 +41,14 @@ export function errorHandler(err, req, res, _next) {
         });
     }
 
+    if (err.name === 'MulterError') {
+        logger.warn({ code: err.code, path: req.path }, err.message);
+        return res.status(400).json({
+            error: err.code === 'LIMIT_FILE_SIZE' ? 'El archivo supera el tamaño máximo permitido' : err.message,
+            code: 'UPLOAD_ERROR',
+        });
+    }
+
     logger.error({ err, path: req.path }, 'Error no manejado');
     res.status(500).json({
         error: 'Error interno del servidor',

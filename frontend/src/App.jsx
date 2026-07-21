@@ -6,6 +6,7 @@ import LoginPage from "./components/LoginPage";
 import HomePage from "./pages/Home";
 import ProfilePage from "./pages/ProfilePage";
 import CandidateChatPage from "./pages/CandidateChatPage";
+import ProfileFillChatPage from "./pages/ProfileFillChatPage";
 import RecruiterPage from "./pages/RecruiterPage";
 import NotFoundPage from "./pages/NotFoundPage";
 import OnboardingPage from "./pages/OnboardingPage";
@@ -68,6 +69,15 @@ export default function App() {
                         element={
                             <ProtectedRoute>
                                 <Navigate to={`/${user?.id}`} replace />
+                            </ProtectedRoute>
+                        }
+                    />
+                    {/* Chat de completar perfil con IA (siempre el propio usuario) */}
+                    <Route
+                        path="/mi-ia/completar"
+                        element={
+                            <ProtectedRoute>
+                                <ProfileFillChatPage />
                             </ProtectedRoute>
                         }
                     />

@@ -1,6 +1,7 @@
 import express from 'express';
 import { autenticarUsuario } from '../middlewares/authMiddleware.js';
 import { authenticatedLimiter } from '../middlewares/rateLimiter.js';
+import { cvUpload } from '../middlewares/uploadMiddleware.js';
 import {
 	getProfile,
 	getBasicData,
@@ -12,7 +13,9 @@ import {
 	saveOnboardingStep,
 	completeOnboarding,
 	updateUserRole,
+	confirmProfileUpdates,
 } from '../controllers/userController.js';
+import { extractProfileFromCV } from '../controllers/profileImportController.js';
 
 const router = express.Router();
 
@@ -26,5 +29,7 @@ router.delete('/:id/section/:sectionKey/:itemId', autenticarUsuario, authenticat
 router.post('/:id/photo', autenticarUsuario, authenticatedLimiter, uploadOnboardingPhoto);
 router.put('/:id/onboarding', autenticarUsuario, authenticatedLimiter, saveOnboardingStep);
 router.put('/:id/onboarding/complete', autenticarUsuario, authenticatedLimiter, completeOnboarding);
+router.post('/:id/cv/extract', autenticarUsuario, authenticatedLimiter, cvUpload.single('cv'), extractProfileFromCV);
+router.post('/:id/profile-updates/confirm', autenticarUsuario, authenticatedLimiter, confirmProfileUpdates);
 
 export default router;
