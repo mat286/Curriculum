@@ -2,8 +2,20 @@ import { randomUUID } from 'node:crypto';
 import { ValidationError } from '../middlewares/errorHandler.js';
 import { chatOrchestrator } from '../modules/chat/ChatOrchestrator.js';
 import { initSSE } from '../modules/chat/StreamResponse.js';
+import { pool } from '../config/db.js';
 import logger from '../utils/logger.js';
 import { isRetryableError } from '../utils/retryUtils.js';
+
+function buildLastMessageSnippet(lastMessages) {
+    try {
+        const parsed = typeof lastMessages === 'string' ? JSON.parse(lastMessages || '[]') : (lastMessages || []);
+        const last = Array.isArray(parsed) && parsed.length > 0 ? parsed[parsed.length - 1] : null;
+        if (!last?.content) return '';
+        return String(last.content).slice(0, 140);
+    } catch {
+        return '';
+    }
+}
 
 /**
  * POST /api/chat/candidate/:id
@@ -149,5 +161,40 @@ export async function askCandidateStream(req, res, next) {
         } else {
             next(error);
         }
+    }
+}
+
+/**
+ * GET /api/chat/my-conversations
+ * Lista los candidatos con los que el usuario autenticado charló (como
+ * visitante, no como dueño del perfil), para el sidebar del chat propio.
+ */
+export async function listMyConversations(req, res, next) {
+    try {
+        const requesterId = req.user.id;
+
+        const [rows] = await pool.query(
+            `SELECT ccm.candidate_id, ccm.updated_at, ccm.last_messages,
+                    u.nombre, u.apellido, u.profile_photo_url, u.puesto_actual
+             FROM candidate_conversation_memory ccm
+             JOIN usuarios u ON u.id = ccm.candidate_id
+             WHERE ccm.requester_id = ? AND ccm.candidate_id <> ?
+             ORDER BY ccm.updated_at DESC`,
+            [requesterId, requesterId],
+        );
+
+        const conversations = rows.map((row) => ({
+            candidateId: row.candidate_id,
+            nombre: row.nombre,
+            apellido: row.apellido,
+            puestoActual: row.puesto_actual,
+            profilePhotoUrl: row.profile_photo_url,
+            updatedAt: row.updated_at,
+            lastMessageSnippet: buildLastMessageSnippet(row.last_messages),
+        }));
+
+        res.json({ success: true, conversations });
+    } catch (error) {
+        next(error);
     }
 }
