@@ -1,7 +1,10 @@
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { Search } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { candidatesService } from "../services/api";
+import Chip from "../components/Chip";
+import { avatarGradient } from "../utils/avatarColor";
 import "./Home.css";
 
 const PRODUCT_STEPS = [
@@ -177,17 +180,20 @@ export default function Home() {
                 </div>
 
                 <div className="search-toolbar">
-                    <input
-                        type="search"
-                        value={search}
-                        onChange={(e) => setSearch(e.target.value)}
-                        placeholder={
-                            isAuthenticated
-                                ? "Buscar por nombre, rol, habilidades..."
-                                : "Inicia sesión para explorar candidatos"
-                        }
-                        disabled={!isAuthenticated}
-                    />
+                    <div className="search-input-wrap">
+                        <Search size={16} strokeWidth={2} />
+                        <input
+                            type="search"
+                            value={search}
+                            onChange={(e) => setSearch(e.target.value)}
+                            placeholder={
+                                isAuthenticated
+                                    ? "Buscar por nombre, rol, habilidades..."
+                                    : "Inicia sesión para explorar candidatos"
+                            }
+                            disabled={!isAuthenticated}
+                        />
+                    </div>
                     {isAuthenticated && (
                         <span>
                             {loadingCandidates
@@ -205,7 +211,7 @@ export default function Home() {
                             {filteredCandidates.map(c => (
                                 <article key={c.id} className="candidate-card">
                                     <div className="candidate-card-header">
-                                        <div className="candidate-avatar-initials">
+                                        <div className="candidate-avatar-initials" style={{ background: avatarGradient(c.nombre) }}>
                                             {c.nombre.split(' ').slice(0, 2).map(n => n[0]).join('').toUpperCase()}
                                         </div>
                                         <div>
@@ -221,7 +227,7 @@ export default function Home() {
                                     {c.habilidades.length > 0 && (
                                         <div className="candidate-skills">
                                             {c.habilidades.slice(0, 4).map(s => (
-                                                <span key={s} className="skill-tag">{s}</span>
+                                                <Chip key={s}>{s}</Chip>
                                             ))}
                                         </div>
                                     )}

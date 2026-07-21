@@ -2,18 +2,13 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { onboarding } from "../services/api";
 import { useAuth } from "../context/AuthContext";
+import CVUploadPanel from "./CVUploadPanel";
 import "./OnboardingWizard.css";
 
 const TOTAL_STEPS = 5;
 
 const PHOTO_ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp"];
 const PHOTO_MAX_SIZE_BYTES = 5 * 1024 * 1024;
-const CV_ALLOWED_TYPES = [
-    "application/pdf",
-    "application/msword",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "text/plain",
-];
 
 const getUserId = (user) => user?.id || user?.userId || user?.googleId || null;
 
@@ -69,14 +64,6 @@ const STEP_CONTENT = {
     },
 };
 
-const readFileAsDataUrl = (file) =>
-    new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = () => reject(new Error("No se pudo leer el archivo seleccionado."));
-        reader.readAsDataURL(file);
-    });
-
 export default function OnboardingWizard() {
     const navigate = useNavigate();
     const { user, updateUser, markOnboardingCompleted } = useAuth();
@@ -90,12 +77,10 @@ export default function OnboardingWizard() {
         photo: "",
         nombre: "",
         puestoActual: "",
-        cv: "",
     });
 
     const [savingStep, setSavingStep] = useState(false);
     const [uploadingPhoto, setUploadingPhoto] = useState(false);
-    const [processingCv, setProcessingCv] = useState(false);
     const [completing, setCompleting] = useState(false);
 
     const [photoFile, setPhotoFile] = useState(null);
@@ -107,8 +92,6 @@ export default function OnboardingWizard() {
         resumen: user?.resumen || "",
     });
 
-    const [cvFile, setCvFile] = useState(null);
-    const [cvText, setCvText] = useState("");
     const [isPublic, setIsPublic] = useState(parseBoolean(user?.isPublic ?? user?.is_public));
 
     useEffect(() => {
@@ -117,7 +100,7 @@ export default function OnboardingWizard() {
 
     useEffect(() => {
         setError("");
-        setFieldErrors({ photo: "", nombre: "", puestoActual: "", cv: "" });
+        setFieldErrors({ photo: "", nombre: "", puestoActual: "" });
     }, [currentStep]);
 
     useEffect(() => {
@@ -284,48 +267,18 @@ export default function OnboardingWizard() {
         goToStep(4);
     };
 
-    const validateCv = () => {
-        if (!cvFile && !cvText.trim()) {
-            return "Sube un CV o pega el texto para procesarlo.";
+    const handleCvSaved = async () => {
+        try {
+            await saveStep(4, { cvProcessed: true });
+        } catch {
+            // saveStep ya seteó el error visible; no bloqueamos el avance del wizard por esto
         }
-
-        if (cvFile && !CV_ALLOWED_TYPES.includes(cvFile.type)) {
-            return "Formato de CV no compatible. Usa PDF, DOC, DOCX o TXT.";
-        }
-
-        return "";
+        goToStep(5);
     };
 
-    const handleProcessCv = async () => {
-        const validationError = validateCv();
-        if (validationError) {
-            setFieldErrors((previous) => ({ ...previous, cv: validationError }));
-            return;
-        }
-
-        setProcessingCv(true);
-        setError("");
-        setFieldErrors((previous) => ({ ...previous, cv: "" }));
-
-        try {
-            const payload = {
-                cvText: cvText.trim(),
-                cvFileName: cvFile?.name || null,
-                cvFileType: cvFile?.type || null,
-                cvFileSize: cvFile?.size || null,
-            };
-
-            if (cvFile) {
-                payload.cvFileContent = await readFileAsDataUrl(cvFile);
-            }
-
-            await saveStep(4, payload);
-            goToStep(5);
-        } catch (apiError) {
-            setError(apiError?.message || "No se pudo procesar el CV.");
-        } finally {
-            setProcessingCv(false);
-        }
+    const handleCvSkip = async () => {
+        await saveStep(4, { skippedCv: true });
+        goToStep(5);
     };
 
     const handleComplete = async (publishProfile) => {
@@ -359,7 +312,7 @@ export default function OnboardingWizard() {
         }
     };
 
-    const isBusy = savingStep || uploadingPhoto || processingCv || completing;
+    const isBusy = savingStep || uploadingPhoto || completing;
     const progressPercent = Math.round((currentStep / TOTAL_STEPS) * 100);
     const currentStepMeta = STEP_CONTENT[currentStep];
 
@@ -529,42 +482,19 @@ export default function OnboardingWizard() {
 
                     {currentStep === 4 && (
                         <div className="onboarding-step-content">
-                            <p className="onboarding-step-support">Puedes subir archivo o pegar texto. Con uno de los dos es suficiente.</p>
+                            <p className="onboarding-step-support">
+                                Subí tu CV (o pegá el texto) y la IA va a proponerte los datos para tu perfil —
+                                vas a poder revisarlos antes de guardarlos.
+                            </p>
 
-                            <label className="wizard-label" htmlFor="wizard-cv-file-input">
-                                Archivo CV
-                            </label>
-
-                            <input
-                                id="wizard-cv-file-input"
-                                className="wizard-input"
-                                type="file"
-                                accept=".pdf,.doc,.docx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
-                                onChange={(event) => setCvFile(event.target.files?.[0] || null)}
-                                disabled={isBusy}
-                            />
-
-                            <label className="wizard-label" htmlFor="wizard-cv-text-input">
-                                Texto CV
-                            </label>
-                            <textarea
-                                id="wizard-cv-text-input"
-                                className="wizard-input wizard-textarea"
-                                placeholder="O copia y pega aquí el contenido de tu CV"
-                                value={cvText}
-                                onChange={(event) => setCvText(event.target.value)}
-                                disabled={isBusy}
-                                rows={8}
-                            />
-
-                            {fieldErrors.cv && <p className="wizard-field-error">{fieldErrors.cv}</p>}
+                            <CVUploadPanel userId={userId} onSaved={handleCvSaved} />
 
                             <div className="onboarding-actions">
                                 <button className="wizard-secondary" onClick={() => goToStep(3)} disabled={isBusy}>
                                     Volver
                                 </button>
-                                <button className="wizard-primary" onClick={handleProcessCv} disabled={isBusy}>
-                                    {processingCv ? "Procesando..." : "Guardar y seguir"}
+                                <button className="wizard-secondary" onClick={handleCvSkip} disabled={isBusy}>
+                                    {savingStep ? "Guardando..." : "Saltear este paso"}
                                 </button>
                             </div>
                         </div>

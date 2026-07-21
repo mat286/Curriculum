@@ -1,0 +1,30 @@
+.ui-score-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 90px;
+}
+
+.ui-score-track {
+    flex: 1;
+    height: 6px;
+    border-radius: 999px;
+    background: #F3F4F6;
+    overflow: hidden;
+}
+
+.ui-score-fill {
+    height: 100%;
+    border-radius: inherit;
+    background: #10A37F;
+    transition: width 0.3s ease;
+}
+
+.ui-score-value {
+    flex-shrink: 0;
+    font-size: 0.76rem;
+    font-weight: 700;
+    color: #111827;
+    min-width: 32px;
+    text-align: right;
+}

@@ -1,0 +1,26 @@
+.ui-thinking {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.82rem;
+    color: #6B7280;
+    padding: 2px 0;
+}
+
+.ui-thinking-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #10A37F;
+    flex-shrink: 0;
+    animation: ui-thinking-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes ui-thinking-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%       { opacity: 0.4; transform: scale(0.72); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .ui-thinking-dot { animation: none; }
+}

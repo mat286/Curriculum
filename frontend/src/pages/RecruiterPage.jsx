@@ -1,7 +1,13 @@
 import React, { useState } from "react";
 import { Link } from "react-router-dom";
+import { Send, RotateCcw, Sparkles } from "lucide-react";
 import { recruiterService } from "../services/api";
+import Chip from "../components/Chip";
+import ScoreBar from "../components/ScoreBar";
+import ThinkingIndicator from "../components/ThinkingIndicator";
 import "./RecruiterPage.css";
+
+const EXAMPLE_PROMPTS = ["Backend Node Senior", "React Native", "Data Engineer", "CTO Fintech"];
 
 export default function RecruiterPage() {
     const [messages, setMessages] = useState([
@@ -88,7 +94,7 @@ export default function RecruiterPage() {
                     </div>
                     {phase === "results" && (
                         <button type="button" className="reset-search-btn" onClick={handleReset}>
-                            Nueva búsqueda
+                            <RotateCcw size={14} strokeWidth={2} /> Nueva búsqueda
                         </button>
                     )}
                 </div>
@@ -98,14 +104,38 @@ export default function RecruiterPage() {
                     <span>{phase === "results" ? `${results.length} candidatos sugeridos` : "Brief en construcción"}</span>
                 </div>
 
-                <div className="recruiter-messages">
-                    {messages.map((message) => (
-                        <div key={message.id} className={`recruiter-bubble ${message.role}`}>
-                            {message.content}
+                {phase === "collect" && messages.length === 1 && !loading ? (
+                    <div className="recruiter-empty-hero">
+                        <Sparkles size={26} strokeWidth={1.8} />
+                        <h2>¿Qué tipo de perfil buscás?</h2>
+                        <p>Describilo con tus palabras — la IA arma el brief y busca en la base.</p>
+                        <div className="recruiter-empty-examples">
+                            {EXAMPLE_PROMPTS.map((example) => (
+                                <button
+                                    key={example}
+                                    type="button"
+                                    className="recruiter-example-btn"
+                                    onClick={() => setInput(example)}
+                                >
+                                    <Chip>{example}</Chip>
+                                </button>
+                            ))}
                         </div>
-                    ))}
-                    {loading && <div className="recruiter-bubble assistant">Procesando…</div>}
-                </div>
+                    </div>
+                ) : (
+                    <div className="recruiter-messages">
+                        {messages.map((message) => (
+                            <div key={message.id} className={`recruiter-bubble ${message.role}`}>
+                                {message.content}
+                            </div>
+                        ))}
+                        {loading && (
+                            <div className="recruiter-bubble assistant">
+                                <ThinkingIndicator label="Analizando tu búsqueda..." />
+                            </div>
+                        )}
+                    </div>
+                )}
 
                 {error && <div className="recruiter-error">{error}</div>}
 
@@ -118,7 +148,8 @@ export default function RecruiterPage() {
                         placeholder="Ej: Busco un backend developer semi-senior con Node.js, APIs REST y Docker"
                     />
                     <button type="button" onClick={handleSend} disabled={loading || !input.trim()}>
-                        {loading ? "Enviando..." : phase === "results" ? "Refinar" : "Enviar"}
+                        {loading ? <span className="send-spinner" /> : <Send size={16} strokeWidth={2} />}
+                        {phase === "results" ? "Refinar" : "Enviar"}
                     </button>
                 </div>
             </section>
@@ -147,7 +178,7 @@ export default function RecruiterPage() {
                                         <h3>{candidate.nombre}</h3>
                                         {candidate.puestoActual && <p>{candidate.puestoActual}</p>}
                                     </div>
-                                    <span className="score-badge">{candidate.score}%</span>
+                                    <ScoreBar value={candidate.score} />
                                 </div>
 
                                 {candidate.resumen && <p className="result-summary">{candidate.resumen}</p>}
@@ -156,7 +187,7 @@ export default function RecruiterPage() {
                                 {candidate.habilidades?.length > 0 && (
                                     <div className="result-tags">
                                         {candidate.habilidades.slice(0, 5).map((skill) => (
-                                            <span key={skill}>{skill}</span>
+                                            <Chip key={skill}>{skill}</Chip>
                                         ))}
                                     </div>
                                 )}

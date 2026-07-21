@@ -42,7 +42,7 @@
 }
 
 .metrics-window__button.is-active {
-  background: rgba(96, 165, 250, 0.16);
+  background: rgba(17, 24, 39, 0.16);
   color: var(--text);
 }
 
@@ -139,7 +139,7 @@
 }
 
 .metrics-job-card--running strong {
-  color: #38bdf8;
+  color: #111827;
 }
 
 .metrics-job-card--done strong {

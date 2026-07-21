@@ -1,0 +1,91 @@
+.candidate-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 32px;
+    height: 100%;
+    overflow-y: auto;
+    padding-right: 2px;
+}
+
+.candidate-panel-header {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 4px;
+}
+
+.candidate-panel-avatar {
+    width: 76px;
+    height: 76px;
+    border-radius: 50%;
+    background: #F3F4F6;
+    color: #ffffff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.4rem;
+    font-weight: 700;
+    overflow: hidden;
+    margin-bottom: 8px;
+}
+.candidate-panel-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+.candidate-panel-avatar.skeleton {
+    margin: 0 auto 8px;
+}
+
+.candidate-panel-skeleton-line {
+    height: 12px;
+    border-radius: 6px;
+    margin: 4px auto 0;
+}
+
+.candidate-panel-name {
+    margin: 0;
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: #111827;
+}
+
+.candidate-panel-headline {
+    margin: 0;
+    font-size: 0.86rem;
+    color: #6B7280;
+}
+
+.candidate-panel-location {
+    margin: 2px 0 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.78rem;
+    color: #6B7280;
+}
+
+.candidate-panel-section {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.candidate-panel-section h3 {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #6B7280;
+}
+
+.candidate-panel-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}

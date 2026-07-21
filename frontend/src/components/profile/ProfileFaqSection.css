@@ -218,7 +218,7 @@
 }
 
 .faq-item__btn--toggle {
-    background: rgba(96, 165, 250, 0.1);
+    background: #F3F4F6;
     color: var(--muted);
     border: 1px solid var(--border);
 }
@@ -230,7 +230,7 @@
 }
 
 .faq-item__btn--edit {
-    background: rgba(96, 165, 250, 0.12);
+    background: #F3F4F6;
     color: var(--primary);
 }
 

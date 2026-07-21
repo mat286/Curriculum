@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
+import { Sparkles, BarChart3, Menu } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import "./Navbar.css";
 
@@ -28,7 +29,7 @@ export default function Navbar() {
         <header className="navbar-shell">
             <nav className="navbar">
                 <button type="button" className="navbar-logo" onClick={handleLogoClick}>
-                    <span className="navbar-logo-mark">🧠</span>
+                    <span className="navbar-logo-mark"><Sparkles size={20} strokeWidth={2.2} /></span>
                     <span>
                         <strong>CV Conversacional</strong>
                         <small>Hablar con talento, no solo leerlo</small>
@@ -42,9 +43,7 @@ export default function Navbar() {
                     aria-expanded={menuOpen}
                     onClick={() => setMenuOpen((current) => !current)}
                 >
-                    <span />
-                    <span />
-                    <span />
+                    <Menu size={20} strokeWidth={2} />
                 </button>
 
                 <div className={`navbar-panel ${menuOpen ? "is-open" : ""}`}>
@@ -57,17 +56,18 @@ export default function Navbar() {
                                 <li className={location.pathname === "/perfil" ? "active" : ""}>
                                     <Link to="/perfil">Mi perfil</Link>
                                 </li>
-                                {isRecruiter && (
-                                    <li className={location.pathname === "/search" ? "active" : ""}>
-                                        <Link to="/search">Buscar candidatos</Link>
-                                    </li>
-                                )}
+                                <li className={location.pathname === "/search" ? "active" : ""}>
+                                    <Link to="/search">{isRecruiter ? "Buscar candidatos" : "Modo recruiter"}</Link>
+                                </li>
                                 <li className={location.pathname === `/${user?.id}` ? "active" : ""}>
-                                    <Link to={`/${user?.id}`}>Hablar con mi IA</Link>
+                                    <Link to={`/${user?.id}`}>Vista previa</Link>
+                                </li>
+                                <li className={location.pathname === "/mi-ia/completar" ? "active" : ""}>
+                                    <Link to="/mi-ia/completar">Completar perfil</Link>
                                 </li>
                                    {user?.isAdmin && (
                                        <li className={location.pathname === "/admin/telemetry" ? "active" : ""}>
-                                           <Link to="/admin/telemetry">📊 Telemetría</Link>
+                                           <Link to="/admin/telemetry"><BarChart3 size={14} strokeWidth={2} /> Telemetría</Link>
                                        </li>
                                    )}
                             </>

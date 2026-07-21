@@ -42,7 +42,10 @@ export default function ProfileSidebar({ profile, completion, sections, activeSe
 
         <div className="profile-sidebar-actions">
           <Link to="/chat" className="sidebar-primary-btn">
-            Ver demo en chat
+            Ver vista previa
+          </Link>
+          <Link to="/mi-ia/completar" className="profile-ghost-btn profile-ghost-btn--link">
+            Completar perfil con IA
           </Link>
         </div>
       </div>
