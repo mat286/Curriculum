@@ -1,22 +1,36 @@
 import { ContextCompressionService } from '../../services/ContextCompressionService.js';
-import { normalizeText, tokenize, lexicalOverlapScore, compact } from '../../utils/textUtils.js';
+import { compact } from '../../utils/textUtils.js';
+
+// Caps aplicados solo a secciones que NO fueron priorizadas por la intención
+// detectada (contexto "de relleno"). Una sección explícitamente priorizada
+// (ej. preguntaron por experiencia laboral) se manda completa: es lo que
+// reemplaza la cobertura que antes dependía de la búsqueda semántica para
+// llegar a datos "viejos" recortados.
+const DEFAULT_SECTION_CAPS = {
+    experiencia_laboral: 4,
+    educacion: 3,
+    cursos: 4,
+    proyectos: 4,
+    habilidades: 15,
+    respuestas_entrevista: 4,
+};
 
 function trimArray(arr, max) {
     if (!Array.isArray(arr) || arr.length <= max) return arr;
     return arr.slice(-max);
 }
 
-function trimProfile(profile) {
+function trimProfile(profile, selectedSections = []) {
     if (!profile) return profile;
-    return {
-        ...profile,
-        experiencia_laboral: trimArray(profile.experiencia_laboral, 4),
-        educacion: trimArray(profile.educacion, 3),
-        cursos: trimArray(profile.cursos, 4),
-        proyectos: trimArray(profile.proyectos, 4),
-        habilidades: trimArray(profile.habilidades, 15),
-        respuestas_entrevista: trimArray(profile.respuestas_entrevista, 4),
-    };
+    const prioritized = new Set(selectedSections);
+    const trimmed = { ...profile };
+
+    for (const [section, cap] of Object.entries(DEFAULT_SECTION_CAPS)) {
+        if (prioritized.has(section)) continue;
+        trimmed[section] = trimArray(profile[section], cap);
+    }
+
+    return trimmed;
 }
 
 function truncateText(value, maxChars) {
@@ -36,64 +50,25 @@ function stringifyValue(value, maxChars) {
     return truncateText(JSON.stringify(value), maxChars);
 }
 
-function formatProfileFacts(profile, maxChars) {
+const DEFAULT_FIELD_MAX_CHARS = 260;
+// Una sección priorizada por la intención necesita un presupuesto de
+// caracteres más grande que el de relleno, si no el corte por cantidad de
+// items (trimProfile) no sirve de nada: el JSON serializado se cortaría
+// igual a mitad de camino.
+const PRIORITIZED_FIELD_MAX_CHARS = 1400;
+
+function formatProfileFacts(profile, maxChars, selectedSections = []) {
     if (!profile || typeof profile !== 'object') return '';
 
+    const prioritized = new Set(selectedSections);
     const lines = Object.entries(profile)
         .map(([section, value]) => {
-            const serialized = stringifyValue(value, 260);
+            const fieldMaxChars = prioritized.has(section)
+                ? PRIORITIZED_FIELD_MAX_CHARS
+                : DEFAULT_FIELD_MAX_CHARS;
+            const serialized = stringifyValue(value, fieldMaxChars);
             if (!serialized) return null;
             return `- [PERFIL:${section}] ${serialized}`;
-        })
-        .filter(Boolean);
-
-    return truncateText(lines.join('\n'), maxChars);
-}
-
-function dedupeSemanticChunks(chunks) {
-    const seen = new Set();
-    const deduped = [];
-
-    for (const chunk of chunks) {
-        const key = normalizeText(chunk).slice(0, 160);
-        if (!key || seen.has(key)) continue;
-        seen.add(key);
-        deduped.push(chunk);
-    }
-
-    return deduped;
-}
-
-function prioritizeSemanticChunks({ chunks, question, selectedSections = [], maxChunks }) {
-    const deduped = dedupeSemanticChunks(chunks || []);
-    const sectionTokens = new Set(tokenize(selectedSections.join(' ')));
-
-    const ranked = deduped.map((chunk, index) => {
-        const overlap = lexicalOverlapScore(chunk, question);
-        const hasSectionHint = tokenize(chunk).some((t) => sectionTokens.has(t));
-        const score = overlap + (hasSectionHint ? 0.05 : 0) - index * 0.01;
-        return { chunk, score };
-    });
-
-    ranked.sort((a, b) => b.score - a.score);
-    return ranked.slice(0, maxChunks).map((item) => item.chunk);
-}
-
-function formatSemanticFacts(chunks, maxChars, question, selectedSections, maxChunks, chunkMaxChars) {
-    if (!Array.isArray(chunks) || chunks.length === 0) return '';
-
-    const prioritized = prioritizeSemanticChunks({
-        chunks,
-        question,
-        selectedSections,
-        maxChunks,
-    });
-
-    const lines = prioritized
-        .map((chunk, index) => {
-            const text = stringifyValue(chunk, chunkMaxChars);
-            if (!text) return null;
-            return `- [SEMANTICO:${index + 1}] ${text}`;
         })
         .filter(Boolean);
 
@@ -108,7 +83,6 @@ export class PromptAssembler {
     build({
         candidateName,
         profileContext,
-        semanticContext = [],
         conversationMemory,
         faqHit,
         selectedSections = [],
@@ -118,7 +92,6 @@ export class PromptAssembler {
         // P0-001: Context Compression pipeline
         const compressionResult = this.compressionService.compress({
             profileContext,
-            semanticContext,
             conversationMemory,
             selectedSections,
             question,
@@ -127,32 +100,18 @@ export class PromptAssembler {
 
         // Use compressed context
         const compressedProfileContext = compressionResult.profileContext;
-        const compressedSemanticContext = compressionResult.semanticContext;
         const compressedMemory = compressionResult.conversationMemory;
 
         const promptMaxChars = parseInt(process.env.PROMPT_MAX_CHARS || '7200', 10);
         const profileMaxChars = parseInt(process.env.PROMPT_PROFILE_MAX_CHARS || '2200', 10);
-        const semanticMaxChars = parseInt(process.env.PROMPT_SEMANTIC_MAX_CHARS || '1800', 10);
-        const semanticMaxChunks = parseInt(process.env.PROMPT_SEMANTIC_MAX_CHUNKS || '5', 10);
-        const semanticChunkMaxChars = parseInt(process.env.PROMPT_SEMANTIC_CHUNK_MAX_CHARS || '280', 10);
         const memoryMaxChars = parseInt(process.env.PROMPT_MEMORY_MAX_CHARS || '600', 10);
-        const compactProfile = compact(trimProfile(compressedProfileContext));
+        const compactProfile = compact(trimProfile(compressedProfileContext, selectedSections));
 
         const memorySummary = compressedMemory?.summary
             ? truncateText(compressedMemory.summary, memoryMaxChars)
             : '';
 
-        const profileFacts = formatProfileFacts(compactProfile, profileMaxChars);
-        const semanticFacts = formatSemanticFacts(
-            compressedSemanticContext,
-            semanticMaxChars,
-            question,
-            selectedSections,
-            Number.isFinite(semanticMaxChunks) && semanticMaxChunks > 0 ? semanticMaxChunks : 5,
-            Number.isFinite(semanticChunkMaxChars) && semanticChunkMaxChars > 0
-                ? semanticChunkMaxChars
-                : 280,
-        );
+        const profileFacts = formatProfileFacts(compactProfile, profileMaxChars, selectedSections);
         const memoryFacts = memorySummary ? `- [MEMORIA:resumen] ${memorySummary}` : '';
 
         // ── System Instruction (se pasa nativamente a Gemini, tiene mayor peso) ──────
@@ -168,9 +127,8 @@ export class PromptAssembler {
             'Frase de seguridad recomendada: "No tengo informacion especifica sobre eso en mi perfil."',
             '',
             '## USO DE FUENTES (prioridad)',
-            '1) CONTEXTO SEMANTICO',
-            '2) PERFIL',
-            '3) MEMORIA CONVERSACIONAL',
+            '1) PERFIL',
+            '2) MEMORIA CONVERSACIONAL',
             'Si hay conflicto entre fuentes, prioriza la de mayor nivel.',
             '',
             '## ESTILO CONVERSACIONAL',
@@ -190,7 +148,6 @@ export class PromptAssembler {
             faqHit?.hit && faqHit.faq
                 ? formatBlock('HECHOS VERIFICABLES - FAQ', `- [FAQ:pregunta] ${faqHit.faq.question}\n- [FAQ:respuesta] ${faqHit.faq.answer}`)
                 : null,
-            formatBlock('HECHOS VERIFICABLES - CONTEXTO SEMANTICO', semanticFacts),
             selectedSections.length > 0
                 ? formatBlock('SECCIONES PRIORIZADAS', selectedSections.map((section) => `- ${section}`).join('\n'))
                 : null,

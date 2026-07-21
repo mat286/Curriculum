@@ -30,7 +30,7 @@ export async function askCandidate(req, res, next) {
             throw new ValidationError('ID de candidato inválido');
         }
 
-        const { message } = req.body;
+        const { message, anonId } = req.body;
         if (!message || typeof message !== 'string' || message.trim().length === 0) {
             throw new ValidationError('El mensaje no puede estar vacío');
         }
@@ -38,6 +38,7 @@ export async function askCandidate(req, res, next) {
             candidateId,
             message: message.trim(),
             requesterId: req.user?.id,
+            anonSessionId: typeof anonId === 'string' ? anonId : null,
             requestId,
         });
 
@@ -75,12 +76,13 @@ export async function askCandidateStream(req, res, next) {
         return next(new ValidationError('ID de candidato inválido'));
     }
 
-    const { message } = req.body;
+    const { message, anonId } = req.body;
     if (!message || typeof message !== 'string' || message.trim().length === 0) {
         return next(new ValidationError('El mensaje no puede estar vacío'));
     }
 
     const trimmed = message.trim();
+    const anonSessionId = typeof anonId === 'string' ? anonId : null;
     const sse = initSSE(res);
     const requestId = sse.requestId;
     const streamStartedAt = Date.now();
@@ -115,16 +117,18 @@ export async function askCandidateStream(req, res, next) {
         sse.sendAck({ phase: 'accepted' });
         sse.startHeartbeat();
         sse.sendStatus('thinking');
-        sse.sendStatus('retrieving', { source: 'candidate_orchestrator' });
-        sse.sendStatus('generating');
 
         const result = await chatOrchestrator.askStream({
             candidateId,
             message: trimmed,
             requesterId: req.user?.id,
+            anonSessionId,
             requestId,
             onToken: (token) => {
                 if (!clientGone) sse.sendToken(token);
+            },
+            onStatus: (status) => {
+                if (!clientGone) sse.sendStatus(status.status, { label: status.label, sections: status.sections });
             },
         });
 

@@ -44,10 +44,12 @@ export class ContextSelectorService {
             finalInclude = unique([...finalInclude, 'sobre_mi']);
         }
 
-        // Para preguntas muy precisas y alta confianza reducimos ruido contextual.
+        // Para preguntas muy precisas y alta confianza reducimos ruido contextual,
+        // pero nunca por debajo del set base mapeado para el intent (evita perder
+        // secciones legítimas, ej. 'technologies' mapea a 3 secciones).
         const looksSpecific = String(question || '').trim().split(/\s+/).length <= 8;
         if (confidence >= 0.9 && resolvedIntent !== 'general' && looksSpecific) {
-            finalInclude = finalInclude.slice(0, 2);
+            finalInclude = finalInclude.slice(0, Math.max(include.length, 2));
         }
 
         const queryType = INTENT_QUERY_TYPE_MAP[resolvedIntent] || 'general';

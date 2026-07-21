@@ -18,14 +18,14 @@ vi.mock('../modules/llm/DefaultLLMProvider.js', () => ({
 
 import { ChatOrchestrator } from '../modules/chat/ChatOrchestrator.js';
 
-function createOrchestratorForTopK(confidence) {
+function createOrchestrator({ include = ['usuario', 'habilidades'] } = {}) {
     const orchestrator = new ChatOrchestrator();
 
     orchestrator.normalizeService = {
         normalize: vi.fn((text) => text),
     };
     orchestrator.intentClassifier = {
-        classify: vi.fn(() => ({ intent: 'general', confidence })),
+        classify: vi.fn(() => ({ intent: 'general', confidence: 0.6 })),
     };
     orchestrator.aggregateService = {
         getAccessibleCandidateAggregate: vi.fn(async () => ({
@@ -46,29 +46,22 @@ function createOrchestratorForTopK(confidence) {
     orchestrator.memory = {
         get: vi.fn(async () => ({ summary: '', messages: [] })),
     };
+    const pickFromProfileSpy = vi.fn(() => ({ usuario: { nombre: 'Ana' } }));
     orchestrator.contextSelector = {
-        select: vi.fn(() => ({ include: ['usuario', 'habilidades'] })),
-        pickFromProfile: vi.fn(() => ({ usuario: { nombre: 'Ana' } })),
+        select: vi.fn(() => ({ include })),
+        pickFromProfile: pickFromProfileSpy,
     };
-
-    const retrieveSpy = vi.fn(async () => ({
-        chunks: ['chunk 1'],
-        reason: 'ok',
-        durationMs: 1,
-        chunkStats: { beforeDedupe: 1, afterDedupe: 1 },
-    }));
-
-    orchestrator.semantic = { retrieve: retrieveSpy };
+    const buildPromptSpy = vi.fn(() => 'prompt listo');
     orchestrator.promptAssembler = {
-        build: vi.fn(() => 'prompt listo'),
+        build: buildPromptSpy,
     };
 
-    return { orchestrator, retrieveSpy };
+    return { orchestrator, pickFromProfileSpy, buildPromptSpy };
 }
 
-describe('ChatOrchestrator dynamic top-k policy', () => {
+describe('ChatOrchestrator (selección determinística por intención, sin RAG)', () => {
     it('propaga requesterId al aggregate service', async () => {
-        const { orchestrator } = createOrchestratorForTopK(0.81);
+        const { orchestrator } = createOrchestrator();
 
         await orchestrator.prepareContext({ candidateId: 10, requesterId: 20, message: 'contame experiencia' });
 
@@ -76,46 +69,65 @@ describe('ChatOrchestrator dynamic top-k policy', () => {
         expect(orchestrator.aggregateService.getAccessibleCandidateAggregate).toHaveBeenCalledWith(10, 20);
     });
 
-    it('usa top-k=3 con confidence media-alta (0.8)', async () => {
-        const { orchestrator, retrieveSpy } = createOrchestratorForTopK(0.81);
+    it('llama pickFromProfile una sola vez (sin recompute redundante)', async () => {
+        const { orchestrator, pickFromProfileSpy } = createOrchestrator();
 
         await orchestrator.prepareContext({ candidateId: 10, requesterId: 20, message: 'contame experiencia' });
 
-        expect(retrieveSpy).toHaveBeenCalledTimes(1);
-        expect(retrieveSpy.mock.calls[0][0].topK).toBe(3);
+        expect(pickFromProfileSpy).toHaveBeenCalledTimes(1);
     });
 
-    it('usa top-k=4 con confidence entre 0.5 y 0.79', async () => {
-        const { orchestrator, retrieveSpy } = createOrchestratorForTopK(0.65);
+    it('arma el prompt sin semanticContext, usando el perfil seleccionado por intención', async () => {
+        const { orchestrator, buildPromptSpy } = createOrchestrator({ include: ['experiencia_laboral'] });
 
-        await orchestrator.prepareContext({ candidateId: 10, requesterId: 20, message: 'contame educación' });
+        await orchestrator.prepareContext({ candidateId: 10, requesterId: 20, message: 'contame experiencia' });
 
-        expect(retrieveSpy).toHaveBeenCalledTimes(1);
-        expect(retrieveSpy.mock.calls[0][0].topK).toBe(4);
+        expect(buildPromptSpy).toHaveBeenCalledTimes(1);
+        const args = buildPromptSpy.mock.calls[0][0];
+        expect(args).not.toHaveProperty('semanticContext');
+        expect(args.selectedSections).toEqual(['experiencia_laboral']);
     });
 
-    it('usa top-k=5 con confidence < 0.5', async () => {
-        const { orchestrator, retrieveSpy } = createOrchestratorForTopK(0.3);
+    it('invoca onStatus con un label basado en las secciones seleccionadas', async () => {
+        const { orchestrator } = createOrchestrator({ include: ['experiencia_laboral', 'habilidades'] });
+        const onStatus = vi.fn();
 
-        await orchestrator.prepareContext({ candidateId: 10, requesterId: 20, message: 'tema ambiguo' });
+        await orchestrator.prepareContext({
+            candidateId: 10,
+            requesterId: 20,
+            message: 'contame experiencia',
+            onStatus,
+        });
 
-        expect(retrieveSpy).toHaveBeenCalledTimes(1);
-        expect(retrieveSpy.mock.calls[0][0].topK).toBe(5);
+        expect(onStatus).toHaveBeenCalledTimes(1);
+        expect(onStatus).toHaveBeenCalledWith(
+            expect.objectContaining({
+                status: 'retrieving',
+                label: 'Buscando experiencias...',
+                sections: ['experiencia_laboral', 'habilidades'],
+            }),
+        );
     });
 
-    it('aplica override por env cuando está presente', async () => {
-        const previous = process.env.SEMANTIC_TOPK_OVERRIDE;
-        process.env.SEMANTIC_TOPK_OVERRIDE = '9';
+    describe('getSessionKey (aislamiento de visitantes anónimos)', () => {
+        it('usa requesterId cuando el visitante está logueado', () => {
+            const { orchestrator } = createOrchestrator();
+            const key = orchestrator.getSessionKey({ requesterId: 20, anonSessionId: 'anon-uuid-1', candidateId: 10 });
+            expect(key).toBe('session:20:candidate:10');
+        });
 
-        try {
-            const { orchestrator, retrieveSpy } = createOrchestratorForTopK(0.9);
-            await orchestrator.prepareContext({ candidateId: 10, requesterId: 20, message: 'otro mensaje' });
+        it('usa anonSessionId cuando no hay requesterId, para no mezclar visitantes anónimos', () => {
+            const { orchestrator } = createOrchestrator();
+            const keyA = orchestrator.getSessionKey({ anonSessionId: 'anon-uuid-A', candidateId: 10 });
+            const keyB = orchestrator.getSessionKey({ anonSessionId: 'anon-uuid-B', candidateId: 10 });
+            expect(keyA).not.toBe(keyB);
+            expect(keyA).toBe('session:anon-uuid-A:candidate:10');
+        });
 
-            expect(retrieveSpy).toHaveBeenCalledTimes(1);
-            expect(retrieveSpy.mock.calls[0][0].topK).toBe(9);
-        } finally {
-            if (previous === undefined) delete process.env.SEMANTIC_TOPK_OVERRIDE;
-            else process.env.SEMANTIC_TOPK_OVERRIDE = previous;
-        }
+        it('cae a "anon" solo si tampoco hay anonSessionId', () => {
+            const { orchestrator } = createOrchestrator();
+            const key = orchestrator.getSessionKey({ candidateId: 10 });
+            expect(key).toBe('session:anon:candidate:10');
+        });
     });
 });

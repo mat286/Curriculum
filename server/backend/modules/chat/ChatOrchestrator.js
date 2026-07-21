@@ -2,7 +2,6 @@ import { CandidateAggregateService } from '../candidate/CandidateAggregateServic
 import { CandidateContextSnapshotService } from '../candidate/CandidateContextSnapshotService.js';
 import { ConversationMemoryService } from '../memory/ConversationMemoryService.js';
 import { MultiLevelCacheService } from '../cache/MultiLevelCacheService.js';
-import { TargetedSemanticRetriever } from '../semantic/TargetedSemanticRetriever.js';
 import { PromptAssembler } from '../prompt/PromptAssembler.js';
 import { DefaultLLMProvider } from '../llm/DefaultLLMProvider.js';
 import { ResilientLLMProvider } from '../llm/ResilientLLMProvider.js';
@@ -11,8 +10,23 @@ import { NormalizeQuestionService } from './NormalizeQuestionService.js';
 import { IntentClassifierService } from './IntentClassifierService.js';
 import { ContextSelectorService } from './ContextSelectorService.js';
 import { FAQSemanticRetriever } from '../faq/FAQSemanticRetriever.js';
-import { DynamicTopKSelector } from '../../services/DynamicTopKSelector.js';
 import logger from '../../utils/logger.js';
+
+const SECTION_STATUS_LABELS = {
+    experiencia_laboral: 'Buscando experiencias...',
+    educacion: 'Revisando estudios...',
+    habilidades: 'Revisando habilidades...',
+    proyectos: 'Revisando proyectos...',
+    idiomas: 'Revisando idiomas...',
+    respuestas_entrevista: 'Revisando preguntas frecuentes...',
+    sobre_mi: 'Revisando el perfil...',
+    usuario: 'Revisando datos de contacto...',
+};
+
+function buildRetrievingLabel(sections) {
+    const label = sections.map((section) => SECTION_STATUS_LABELS[section]).find(Boolean);
+    return label || 'Revisando tu perfil...';
+}
 
 function asPositiveInt(rawValue, fallback) {
     const parsed = parseInt(String(rawValue ?? ''), 10);
@@ -44,7 +58,6 @@ function pickOptionalMetric(value) {
 
 function buildStreamMetrics({ telemetry, routed, cached }) {
     const ttfbFromMark = telemetry?.marks?.ttfb;
-    const semanticMark = telemetry?.marks?.semantic;
     const promptMark = telemetry?.marks?.prompt;
 
     return {
@@ -52,7 +65,6 @@ function buildStreamMetrics({ telemetry, routed, cached }) {
         totalMs: Date.now() - telemetry.start,
         routed,
         cached: Boolean(cached),
-        semanticMs: pickOptionalMetric(semanticMark?.semanticMs ?? semanticMark?.ms),
         promptChars: pickOptionalMetric(promptMark?.promptChars),
     };
 }
@@ -62,14 +74,12 @@ export class ChatOrchestrator {
         this.aggregateService = new CandidateAggregateService();
         this.snapshotService = new CandidateContextSnapshotService();
         this.cache = new MultiLevelCacheService();
-        this.semantic = new TargetedSemanticRetriever();
         this.memory = new ConversationMemoryService();
         this.promptAssembler = new PromptAssembler();
         this.normalizeService = new NormalizeQuestionService();
         this.intentClassifier = new IntentClassifierService();
         this.contextSelector = new ContextSelectorService();
         this.faqRetriever = new FAQSemanticRetriever();
-        this.dynamicTopKSelector = new DynamicTopKSelector();
         this.llm = new ResilientLLMProvider(new DefaultLLMProvider(), {
             maxRetries: 1,
             circuitThreshold: 4,
@@ -77,8 +87,11 @@ export class ChatOrchestrator {
         });
     }
 
-    getSessionKey({ requesterId, candidateId }) {
-        return `session:${requesterId || 'anon'}:candidate:${candidateId}`;
+    getSessionKey({ requesterId, anonSessionId, candidateId }) {
+        // Visitantes anónimos (link público compartido, sin login) necesitan
+        // una clave de sesión propia — si no, todos compartirían la misma
+        // memoria de conversación de un candidato ('session:anon:candidate:X').
+        return `session:${requesterId || anonSessionId || 'anon'}:candidate:${candidateId}`;
     }
 
     persistConversationInBackground({ sessionKey, candidateId, requesterId, userMessage, assistantMessage, requestId }) {
@@ -128,7 +141,7 @@ export class ChatOrchestrator {
         });
     }
 
-    async prepareContext({ candidateId, message, requesterId, requestId }) {
+    async prepareContext({ candidateId, message, requesterId, anonSessionId, requestId, onStatus }) {
         const telemetry = new ChatTelemetry('candidate-chat', { candidateId, requesterId, requestId });
         this.telemetry = telemetry;
         const normalizedQuestion = this.normalizeService.normalize(message);
@@ -139,7 +152,7 @@ export class ChatOrchestrator {
 
         // Paralelizar aggregate + faqRetriever: ambos solo necesitan candidateId/question,
         // no tienen dependencia entre sí.
-        const sessionKey = this.getSessionKey({ requesterId, candidateId });
+        const sessionKey = this.getSessionKey({ requesterId, anonSessionId, candidateId });
         const [aggregate, faqHit] = await Promise.all([
             this.aggregateService.getAccessibleCandidateAggregate(candidateId, requesterId),
             this.faqRetriever.findBestMatch({ candidateId, question: normalizedQuestion }),
@@ -186,60 +199,16 @@ export class ChatOrchestrator {
             normalizedQuestion,
         );
         telemetry.mark('selector', { include: selected.include.join(',') });
-
-        // P0-001: Dynamic Top-K Selection
-        const topKSelection = this.dynamicTopKSelector.selectTopK({
-            intentConfidence: intentResult.confidence,
-            questionLength: normalizedQuestion.length,
-            intent: intentResult.intent,
-            candidateId,
-            requestId,
-        });
-        const topK = this.dynamicTopKSelector.getEffectiveTopK(topKSelection.topK);
-        telemetry.mark('topk-selection', {
-            topKSelected: topK,
-            decision: topKSelection.decision,
-            confidenceScore: topKSelection.confidenceScore,
-        });
-
-        // Paralelizar memory.get + semantic.retrieve: memory no depende de aggregate.
-        const profileContextForSemantic = this.contextSelector.pickFromProfile(
-            aggregate.snapshot?.json || aggregate.profile,
-            selected.include,
-        );
-        const [memory, semantic] = await Promise.all([
-            this.memory.get(sessionKey),
-            this.semantic.retrieve({
-                candidateId,
-                query: normalizedQuestion,
-                includeSections: selected.include,
-                topK,
-                timeoutMs: 500,
-                minSimilarity: parseFloat(process.env.SEMANTIC_MIN_SIMILARITY || '0.68'),
-                intent: intentResult.intent,
-                intentConfidence: intentResult.confidence,
-                queryType: selected?.retrievalPolicy?.queryType || 'general',
-                profileContext: profileContextForSemantic,
-            }),
-        ]);
-        telemetry.mark('memory');
-        telemetry.mark('semantic', {
-            reason: semantic.reason,
-            semanticMs: semantic.durationMs,
-            topKUsed: topK,
-            chunkCount: semantic.chunks.length,
-            chunksBeforeDedupe: semantic.chunkStats?.beforeDedupe || semantic.chunks.length,
-            chunksAfterDedupe: semantic.chunkStats?.afterDedupe || semantic.chunks.length,
-            searchMethod: semantic.method || 'semantic',
-            hybridStats: semantic.hybridStats,
-        });
+        onStatus?.({ status: 'retrieving', label: buildRetrievingLabel(selected.include), sections: selected.include });
 
         const profileContextRaw = aggregate.snapshot?.json || aggregate.profile;
         const profileContext = this.contextSelector.pickFromProfile(profileContextRaw, selected.include);
+        const memory = await this.memory.get(sessionKey);
+        telemetry.mark('memory');
+
         const promptResult = this.promptAssembler.build({
             candidateName: aggregate.candidateName,
             profileContext,
-            semanticContext: semantic.chunks,
             conversationMemory: memory,
             faqHit,
             selectedSections: selected.include,
@@ -277,8 +246,8 @@ export class ChatOrchestrator {
         };
     }
 
-    async ask({ candidateId, message, requesterId, requestId }) {
-        const prep = await this.prepareContext({ candidateId, message, requesterId, requestId });
+    async ask({ candidateId, message, requesterId, anonSessionId, requestId, onStatus }) {
+        const prep = await this.prepareContext({ candidateId, message, requesterId, anonSessionId, requestId, onStatus });
 
         if (prep.route === 'l1-greeting') {
             return { answer: prep.greeting, routed: 'fast-direct', candidateId };
@@ -321,8 +290,8 @@ export class ChatOrchestrator {
         return { answer, candidateId, routed: 'with_data' };
     }
 
-    async askStream({ candidateId, message, requesterId, requestId, onToken }) {
-        const prep = await this.prepareContext({ candidateId, message, requesterId, requestId });
+    async askStream({ candidateId, message, requesterId, anonSessionId, requestId, onToken, onStatus }) {
+        const prep = await this.prepareContext({ candidateId, message, requesterId, anonSessionId, requestId, onStatus });
 
         if (prep.route === 'l1-greeting') {
             onToken(prep.greeting);
@@ -363,6 +332,8 @@ export class ChatOrchestrator {
                 metrics: buildStreamMetrics({ telemetry: prep.telemetry, routed, cached: true }),
             };
         }
+
+        onStatus?.({ status: 'generating' });
 
         let fullResponse = '';
         let firstToken = true;

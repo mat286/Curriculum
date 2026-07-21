@@ -86,6 +86,9 @@ export async function askStream(req, res, next) {
             onToken: (token) => {
                 if (!clientGone) sse.sendToken(token);
             },
+            onStatus: (status) => {
+                if (!clientGone) sse.sendStatus(status.status, { label: status.label, sections: status.sections });
+            },
         });
 
         if (!clientGone) {
@@ -93,7 +96,6 @@ export async function askStream(req, res, next) {
             sse.sendMetrics({
                 routed: result.routed,
                 intent: result.intent,
-                usedEmbeddings: metrics.chunkCount,
                 ttfbMs: metrics.ttfbMs,
                 totalMs: metrics.totalMs,
             });

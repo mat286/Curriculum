@@ -4,31 +4,9 @@ import { getEmbedding, getEmbeddings } from './ollamaService.js';
 import { getFullProfile } from './dataService.js';
 import { embeddingMetadataRepository } from './EmbeddingMetadataRepository.js';
 import logger from '../utils/logger.js';
-import { HybridSearchService } from './HybridSearchService.js';
-
-const hybridSearchService = new HybridSearchService();
 
 function buildContentHash(content) {
     return crypto.createHash('sha256').update(String(content || '')).digest('hex');
-}
-
-function resolveSearchArgs(topKOrOptions, maybeOptions) {
-    let topK = 3;
-    let options = {};
-
-    if (typeof topKOrOptions === 'number') {
-        topK = topKOrOptions;
-        options = maybeOptions && typeof maybeOptions === 'object' ? maybeOptions : {};
-    } else if (topKOrOptions && typeof topKOrOptions === 'object') {
-        options = topKOrOptions;
-        topK = Number.parseInt(options.topKHint ?? options.topK ?? 3, 10);
-    }
-
-    if (!Number.isFinite(topK) || topK <= 0) {
-        topK = 3;
-    }
-
-    return { topK, options };
 }
 
 /**
