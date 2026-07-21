@@ -11,6 +11,35 @@ function dispatchLogout() {
 
 // Control de inflight refresh para no hacer múltiples llamadas simultáneas
 let refreshPromise = null;
+
+// Renueva el access token usando el refresh token guardado. Reusado tanto por
+// el interceptor de axios como por los servicios de chat con streaming (que
+// usan fetch crudo, no axios, y por eso no pasan por el interceptor).
+function refreshAccessToken() {
+  const refreshToken = localStorage.getItem(STORAGE_KEYS.REFRESH_TOKEN);
+  if (!refreshToken) return Promise.resolve(null);
+
+  if (!refreshPromise) {
+    refreshPromise = axios
+      .post(`${API_BASE_URL}/api/user/refresh`, { refreshToken })
+      .then((res) => {
+        const { token, refreshToken: newRefresh } = res.data;
+        localStorage.setItem(STORAGE_KEYS.TOKEN, token);
+        if (newRefresh) localStorage.setItem(STORAGE_KEYS.REFRESH_TOKEN, newRefresh);
+        return token;
+      })
+      .catch(() => {
+        dispatchLogout();
+        return null;
+      })
+      .finally(() => {
+        refreshPromise = null;
+      });
+  }
+
+  return refreshPromise;
+}
+
 // Crear instancia de axios con configuración base
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -59,26 +88,7 @@ api.interceptors.response.use(
           const isLoginCall = error.config?.url?.includes('/api/user/google');
 
           if (refreshToken && !isRefreshCall && !isLoginCall) {
-            // Reutilizar el mismo promise si ya hay un refresh en vuelo
-            if (!refreshPromise) {
-              refreshPromise = axios
-                .post(`${API_BASE_URL}/api/user/refresh`, { refreshToken })
-                .then((res) => {
-                  const { token, refreshToken: newRefresh } = res.data;
-                  localStorage.setItem(STORAGE_KEYS.TOKEN, token);
-                  if (newRefresh) localStorage.setItem(STORAGE_KEYS.REFRESH_TOKEN, newRefresh);
-                  return token;
-                })
-                .catch(() => {
-                  dispatchLogout();
-                  return null;
-                })
-                .finally(() => {
-                  refreshPromise = null;
-                });
-            }
-
-            return refreshPromise.then((newToken) => {
+            return refreshAccessToken().then((newToken) => {
               if (!newToken) return Promise.reject(new Error(ERROR_MESSAGES.UNAUTHORIZED));
               // Reintentar la petición original con el nuevo token
               error.config.headers.Authorization = `Bearer ${newToken}`;
@@ -187,6 +197,42 @@ export const userService = {
     const response = await api.patch(`/api/user/${userId}/role`, { role });
     return response.data;
   },
+
+  /**
+   * Sube un archivo de CV (PDF/DOCX/TXT) o texto pegado y devuelve una
+   * propuesta de campos de perfil extraída por IA. No guarda nada todavía.
+   */
+  extractCV: async (userId, { file, cvText } = {}) => {
+    if (file) {
+      const formData = new FormData();
+      formData.append('cv', file);
+      const response = await api.post(`/api/user/${userId}/cv/extract`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      return response.data;
+    }
+
+    const response = await api.post(`/api/user/${userId}/cv/extract`, { cvText });
+    return response.data;
+  },
+
+  /**
+   * Guarda una propuesta de actualización de perfil ya confirmada por el
+   * usuario (viene del chat de autocompletado o de la carga de CV).
+   */
+  confirmProfileUpdates: async (userId, payload) => {
+    const response = await api.post(`/api/user/${userId}/profile-updates/confirm`, payload);
+    return response.data;
+  },
+
+  /**
+   * Trae datos públicos de un usuario de GitHub (bio, repos, lenguajes) y
+   * devuelve una propuesta de campos de perfil. No guarda nada todavía.
+   */
+  importFromGithub: async (userId, username) => {
+    const response = await api.post(`/api/user/${userId}/github/import`, { username });
+    return response.data;
+  },
 };
 
 // Servicio de onboarding
@@ -280,6 +326,39 @@ async function readSSEStream(reader, { onToken, onError, onDone, onEvent, signal
 }
 
 
+// Conecta directamente al backend (no via proxy de Vite) para evitar el
+// buffering que impide el streaming en tiempo real.
+const STREAM_BASE_URL = import.meta.env.VITE_STREAM_URL || 'http://localhost:3000';
+
+/**
+ * POST autenticado a un endpoint de streaming SSE. Los servicios de chat usan
+ * fetch crudo (no axios) para poder leer el body como stream, así que no
+ * pasan por el interceptor de arriba — si el access token venció (401/403),
+ * se reintenta una vez con un token renovado antes de darlo por perdido.
+ */
+async function postForStream(path, body, signal) {
+  const doFetch = (authToken) => fetch(`${STREAM_BASE_URL}${path}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+    },
+    signal,
+    body: JSON.stringify(body),
+  });
+
+  let response = await doFetch(localStorage.getItem(STORAGE_KEYS.TOKEN));
+
+  if (response.status === 401 || response.status === 403) {
+    const newToken = await refreshAccessToken();
+    if (newToken) {
+      response = await doFetch(newToken);
+    }
+  }
+
+  return response;
+}
+
 export const chatService = {
   askQuestion: async (question, userId) => {
     const response = await api.post('/api/chat/ask', {
@@ -293,9 +372,6 @@ export const chatService = {
    * Streaming SSE: envía la pregunta y llama a los callbacks conforme
    * llegan los tokens, sin esperar la respuesta completa.
    *
-   * Conecta directamente al backend (port 3000) para evitar el buffering
-   * interno del proxy de Vite que impide el streaming en tiempo real.
-   *
    * @param {string} question
    * @param {string} userId
    * @param {(token: string) => void} onToken
@@ -303,21 +379,11 @@ export const chatService = {
    * @param {() => void}             onDone
    */
   askStream: async (question, userId, onToken, onError, onDone) => {
-    const token = localStorage.getItem(STORAGE_KEYS.TOKEN);
-    // Conecta directamente al backend para evitar buffering del proxy de Vite
-    const streamUrl = import.meta.env.VITE_STREAM_URL || 'http://localhost:3000';
     let response;
 
     try {
-      response = await fetch(`${streamUrl}/api/chat/ask/stream`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ question, userData: { userId } }),
-      });
-    } catch (networkErr) {
+      response = await postForStream('/api/chat/ask/stream', { question, userData: { userId } });
+    } catch {
       onError?.(new Error('Error de red al conectar con el servidor'));
       return;
     }
@@ -337,33 +403,36 @@ export const chatService = {
   },
 };
 
+// Id anónimo de conversación — solo se usa cuando el visitante no tiene
+// sesión (link público compartido). Sin esto, el backend agruparía a todos
+// los visitantes anónimos de un mismo candidato bajo la misma memoria de
+// conversación. Se genera una vez y se guarda en localStorage.
+function getAnonChatId() {
+  const key = 'anon_chat_id';
+  let id = localStorage.getItem(key);
+  if (!id) {
+    id = (crypto.randomUUID?.() || `anon-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    localStorage.setItem(key, id);
+  }
+  return id;
+}
+
 // Servicio de chat con candidato específico (por ID)
 export const candidateChatService = {
   ask: async (candidateId, message) => {
-    const response = await api.post(`/api/chat/candidate/${candidateId}`, { message });
+    const response = await api.post(`/api/chat/candidate/${candidateId}`, { message, anonId: getAnonChatId() });
     return response.data;
   },
 
   /**
    * Igual que ask() pero con SSE streaming token a token.
-   * Conecta directo al backend (port 3000) para evitar el buffering del proxy de Vite.
    */
   askStream: async (candidateId, message, onToken, onError, onDone, options = {}) => {
     const { signal, onEvent } = options;
-    const token = localStorage.getItem(STORAGE_KEYS.TOKEN);
-    const streamUrl = import.meta.env.VITE_STREAM_URL || 'http://localhost:3000';
     let response;
 
     try {
-      response = await fetch(`${streamUrl}/api/chat/candidate/${candidateId}/stream`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        signal,
-        body: JSON.stringify({ message }),
-      });
+      response = await postForStream(`/api/chat/candidate/${candidateId}/stream`, { message, anonId: getAnonChatId() }, signal);
     } catch (networkErr) {
       if (networkErr?.name === 'AbortError') {
         const abortErr = new Error('Solicitud cancelada por el usuario');
@@ -387,6 +456,49 @@ export const candidateChatService = {
     }
 
     await readSSEStream(response.body.getReader(), { onToken, onError, onDone, onEvent, signal });
+  },
+};
+
+// Chat de autocompletado del propio perfil (isOwnChat) — misma mecánica SSE
+// que candidateChatService, apuntando al endpoint de profile-fill.
+export const profileFillChatService = {
+  askStream: async (userId, message, onToken, onError, onDone, options = {}) => {
+    const { signal, onEvent } = options;
+    let response;
+
+    try {
+      response = await postForStream(`/api/chat/profile-fill/${userId}/stream`, { message }, signal);
+    } catch (networkErr) {
+      if (networkErr?.name === 'AbortError') {
+        const abortErr = new Error('Solicitud cancelada por el usuario');
+        abortErr.name = 'AbortError';
+        onError?.(abortErr);
+        return;
+      }
+      onError?.(new Error('Error de red al conectar con el servidor'));
+      return;
+    }
+
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      onError?.(new Error(errData.message || `Error del servidor (${response.status})`));
+      return;
+    }
+
+    if (!response.body) {
+      onError?.(new Error('El servidor no soporta streaming.'));
+      return;
+    }
+
+    await readSSEStream(response.body.getReader(), { onToken, onError, onDone, onEvent, signal });
+  },
+};
+
+// Conversaciones del usuario con otros candidatos (para el sidebar del chat propio)
+export const myConversationsService = {
+  list: async () => {
+    const response = await api.get('/api/chat/my-conversations');
+    return response.data?.conversations || [];
   },
 };
 

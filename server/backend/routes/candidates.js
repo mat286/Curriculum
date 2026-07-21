@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { autenticarUsuario } from '../middlewares/authMiddleware.js';
+import { autenticarUsuario, autenticarUsuarioOpcional } from '../middlewares/authMiddleware.js';
 import { chatLimiter, faqLimiter } from '../middlewares/rateLimiter.js';
 import { getCandidates } from '../controllers/candidatesController.js';
 import {
@@ -11,8 +11,9 @@ import {
 
 const router = Router();
 
-// GET /api/candidates — lista de candidatos públicos
-router.get('/', autenticarUsuario, chatLimiter, getCandidates);
+// GET /api/candidates — lista de candidatos públicos, accesible sin login
+// (necesario para que un link de chat compartido funcione sin cuenta).
+router.get('/', autenticarUsuarioOpcional, chatLimiter, getCandidates);
 
 // CRUD FAQs por candidato (owner only)
 router.get('/:id/faqs', autenticarUsuario, faqLimiter, listCandidateFaqs);

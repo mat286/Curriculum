@@ -1,10 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
+import { CheckCircle2, Circle } from "lucide-react";
 import ProfileListSection from "../components/profile/ProfileListSection";
 import ProfileSection from "../components/profile/ProfileSection";
 import ProfileSidebar from "../components/profile/ProfileSidebar";
 import ProfileFaqSection from "../components/profile/ProfileFaqSection";
 import ProfileAIContextInspector from "../components/profile/ProfileAIContextInspector";
+import ProfileUpdateConfirmCard from "../components/ProfileUpdateConfirmCard";
 import { useAuth } from "../context/AuthContext";
 import { userService } from "../services/api";
 import { SUCCESS_MESSAGES, ERROR_MESSAGES } from "../utils/constants";
@@ -375,6 +377,17 @@ const normalizeSectionItemFromApi = (field, apiItem) => {
 
 const isPersistedItemId = (id) => Number.isInteger(Number(id)) && Number(id) > 0;
 
+const extractGithubUsername = (url) => {
+    const match = String(url || "").trim().match(/github\.com\/([^/?#]+)/i);
+    return match ? match[1] : "";
+};
+
+const isGithubProposalEmpty = (proposal) => {
+    const hasCandidateFields = Object.keys(proposal?.candidateFields || {}).length > 0;
+    const hasSections = Object.values(proposal?.sections || {}).some((rows) => Array.isArray(rows) && rows.length > 0);
+    return !hasCandidateFields && !hasSections;
+};
+
 const normalizeProfileData = (data = {}) => {
     const about = Array.isArray(data.sobre_mi) ? data.sobre_mi[0] || {} : data.sobre_mi || {};
 
@@ -423,6 +436,11 @@ export default function ProfilePage() {
     const [error, setError] = useState(null);
     const [success, setSuccess] = useState(null);
     const [actionFeedback, setActionFeedback] = useState(null);
+    const [showGithubImport, setShowGithubImport] = useState(false);
+    const [githubUsername, setGithubUsername] = useState("");
+    const [githubImporting, setGithubImporting] = useState(false);
+    const [githubProposal, setGithubProposal] = useState(null);
+    const [githubImportError, setGithubImportError] = useState("");
     const feedbackTimerRef = useRef(null);
 
     const showActionFeedback = (message, type = "info") => {
@@ -458,6 +476,55 @@ export default function ProfilePage() {
 
         fetchData();
     }, [userId]);
+
+    const handleOpenGithubImport = () => {
+        setGithubUsername(extractGithubUsername(profile?.githubUrl));
+        setGithubImportError("");
+        setGithubProposal(null);
+        setShowGithubImport(true);
+    };
+
+    const handleGithubImport = async () => {
+        const trimmedUsername = githubUsername.trim();
+        if (!trimmedUsername) {
+            setGithubImportError("Ingresá tu username de GitHub");
+            return;
+        }
+        setGithubImporting(true);
+        setGithubImportError("");
+        setGithubProposal(null);
+        try {
+            const result = await userService.importFromGithub(userId, trimmedUsername);
+            setGithubProposal(result.proposal);
+        } catch (err) {
+            setGithubImportError(err.message || "No se pudo importar desde GitHub. Probá de nuevo.");
+        } finally {
+            setGithubImporting(false);
+        }
+    };
+
+    const handleGithubImportSaved = async () => {
+        setGithubProposal(null);
+        setShowGithubImport(false);
+        showActionFeedback("Perfil actualizado con datos de GitHub", "success");
+        try {
+            const data = await userService.getProfile(userId);
+            setProfile(normalizeProfileData(data));
+        } catch {
+            // El usuario puede refrescar la página manualmente si esto falla.
+        }
+    };
+
+    const shareLink = userId ? `${window.location.origin}/${userId}` : "";
+
+    const handleCopyShareLink = async () => {
+        try {
+            await navigator.clipboard.writeText(shareLink);
+            showActionFeedback("Link copiado al portapapeles", "success");
+        } catch {
+            showActionFeedback("No se pudo copiar el link, copialo manualmente", "warning");
+        }
+    };
 
     const completion = useMemo(() => {
         if (!profile) return 0;
@@ -909,7 +976,7 @@ export default function ProfilePage() {
 
     if (loading) {
         return (
-            <div className="profile-page theme-dark">
+            <div className="profile-page">
                 <div className="profile-container">
                     <div className="profile-loading-skeleton">
                         <div className="skeleton-line skeleton-line--title" />
@@ -928,7 +995,7 @@ export default function ProfilePage() {
 
     if (error && !profile) {
         return (
-            <div className="profile-page theme-dark">
+            <div className="profile-page">
                 <div className="profile-container">
                     <div className="error-message">{error}</div>
                 </div>
@@ -938,7 +1005,7 @@ export default function ProfilePage() {
 
     if (!profile) {
         return (
-            <div className="profile-page theme-dark">
+            <div className="profile-page">
                 <div className="profile-container">
                     <div className="error-message">No se encontraron datos del usuario.</div>
                 </div>
@@ -947,7 +1014,7 @@ export default function ProfilePage() {
     }
 
     return (
-        <div className="profile-page theme-dark">
+        <div className="profile-page">
             <div className="profile-container">
                 <section className="profile-hero">
                     <div>
@@ -993,7 +1060,7 @@ export default function ProfilePage() {
                 <div className="profile-layout">
                     <div className="profile-main">
                         <section className="profile-workbench" aria-label="Navegacion de secciones">
-                            <div className="profile-section-pills" role="tablist" aria-label="Secciones del perfil">
+                            <div className="profile-section-checklist" role="tablist" aria-label="Secciones del perfil">
                                 {sidebarSections.map((section) => (
                                     <button
                                         key={section.key}
@@ -1001,11 +1068,13 @@ export default function ProfilePage() {
                                         role="tab"
                                         aria-selected={activeSection === section.key}
                                         aria-controls={`section-${section.key}`}
-                                        className={activeSection === section.key ? "is-active" : ""}
+                                        className={`profile-checklist-item state-${section.state} ${activeSection === section.key ? "is-active" : ""}`}
                                         onClick={() => jumpToSection(section.key)}
                                     >
+                                        {section.state === "done"
+                                            ? <CheckCircle2 size={16} strokeWidth={2} />
+                                            : <Circle size={16} strokeWidth={2} />}
                                         <span>{section.label}</span>
-                                        <small>{section.progress || 0}%</small>
                                     </button>
                                 ))}
                             </div>
@@ -1155,6 +1224,21 @@ export default function ProfilePage() {
                                             />
                                         </label>
                                     </div>
+
+                                    <div className="field-group full-width share-link-wrap">
+                                        <label htmlFor="shareLink">Link para compartir tu chat de IA</label>
+                                        <div className="share-link-row">
+                                            <input id="shareLink" value={shareLink} readOnly />
+                                            <button type="button" onClick={handleCopyShareLink}>
+                                                Copiar
+                                            </button>
+                                        </div>
+                                        {!profile.isPublic && (
+                                            <small className="share-link-hint">
+                                                Activá "Perfil público" arriba para que cualquiera que abra este link pueda chatear.
+                                            </small>
+                                        )}
+                                    </div>
                                 </div>
                             </div>
 
@@ -1276,7 +1360,53 @@ export default function ProfilePage() {
                                             onChange={handleChange}
                                             placeholder="https://github.com/..."
                                         />
+                                        <button
+                                            type="button"
+                                            className="github-import-btn"
+                                            onClick={handleOpenGithubImport}
+                                        >
+                                            Importar datos desde GitHub
+                                        </button>
                                     </div>
+
+                                    {showGithubImport && (
+                                        <div className="field-group full-width github-import-panel">
+                                            <label htmlFor="githubImportUsername">Tu username de GitHub</label>
+                                            <div className="github-import-row">
+                                                <input
+                                                    id="githubImportUsername"
+                                                    value={githubUsername}
+                                                    onChange={(e) => setGithubUsername(e.target.value)}
+                                                    placeholder="ej: octocat"
+                                                    disabled={githubImporting}
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={handleGithubImport}
+                                                    disabled={githubImporting}
+                                                >
+                                                    {githubImporting ? "Buscando…" : "Buscar"}
+                                                </button>
+                                            </div>
+
+                                            {githubImportError && <p className="github-import-error">{githubImportError}</p>}
+
+                                            {githubProposal && (
+                                                isGithubProposalEmpty(githubProposal) ? (
+                                                    <p className="github-import-empty">
+                                                        No encontramos datos nuevos para proponer desde ese perfil de GitHub.
+                                                    </p>
+                                                ) : (
+                                                    <ProfileUpdateConfirmCard
+                                                        userId={userId}
+                                                        proposal={githubProposal}
+                                                        onSaved={handleGithubImportSaved}
+                                                        onDismiss={() => setGithubProposal(null)}
+                                                    />
+                                                )
+                                            )}
+                                        </div>
+                                    )}
 
                                     <div className="field-group full-width">
                                         <label htmlFor="portfolioUrl">Portfolio o sitio personal</label>

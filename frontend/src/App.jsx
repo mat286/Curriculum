@@ -107,15 +107,10 @@ export default function App() {
                                </ProtectedRoute>
                            }
                        />
-                    {/* Chat con candidato específico — debe ir ÚLTIMO para no capturar otras rutas */}
-                    <Route
-                        path="/:id"
-                        element={
-                            <ProtectedRoute>
-                                <CandidateChatPage />
-                            </ProtectedRoute>
-                        }
-                    />
+                    {/* Chat con candidato específico — público (sin login), para que un
+                        link compartido funcione directo. Debe ir ÚLTIMO para no capturar
+                        otras rutas. */}
+                    <Route path="/:id" element={<CandidateChatPage />} />
                     <Route path="*" element={<NotFoundPage />} />
                 </Routes>
             </div>

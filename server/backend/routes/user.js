@@ -16,6 +16,7 @@ import {
 	confirmProfileUpdates,
 } from '../controllers/userController.js';
 import { extractProfileFromCV } from '../controllers/profileImportController.js';
+import { importFromGithub } from '../controllers/githubImportController.js';
 
 const router = express.Router();
 
@@ -31,5 +32,6 @@ router.put('/:id/onboarding', autenticarUsuario, authenticatedLimiter, saveOnboa
 router.put('/:id/onboarding/complete', autenticarUsuario, authenticatedLimiter, completeOnboarding);
 router.post('/:id/cv/extract', autenticarUsuario, authenticatedLimiter, cvUpload.single('cv'), extractProfileFromCV);
 router.post('/:id/profile-updates/confirm', autenticarUsuario, authenticatedLimiter, confirmProfileUpdates);
+router.post('/:id/github/import', autenticarUsuario, authenticatedLimiter, importFromGithub);
 
 export default router;

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { myConversationsService } from "../services/api";
 import { avatarGradient } from "../utils/avatarColor";
+import { useAuth } from "../context/AuthContext";
 import "./MyConversationsList.css";
 
 function formatRelativeTime(dateString) {
@@ -18,19 +19,35 @@ function formatRelativeTime(dateString) {
 }
 
 export default function MyConversationsList() {
+    const { isAuthenticated } = useAuth();
     const [conversations, setConversations] = useState([]);
-    const [loading, setLoading] = useState(true);
+    const [loading, setLoading] = useState(isAuthenticated);
     const [error, setError] = useState("");
 
     useEffect(() => {
+        if (!isAuthenticated) {
+            setLoading(false);
+            return;
+        }
         let mounted = true;
+        setLoading(true);
         myConversationsService
             .list()
             .then((list) => { if (mounted) setConversations(list); })
             .catch(() => { if (mounted) setError("No se pudieron cargar tus conversaciones."); })
             .finally(() => { if (mounted) setLoading(false); });
         return () => { mounted = false; };
-    }, []);
+    }, [isAuthenticated]);
+
+    if (!isAuthenticated) {
+        return (
+            <div className="my-conversations">
+                <p className="my-conversations-empty">
+                    <Link to="/login">Iniciá sesión</Link> para ver tu historial de conversaciones.
+                </p>
+            </div>
+        );
+    }
 
     if (loading) {
         return (
